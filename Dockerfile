@@ -1,17 +1,20 @@
+# Use the official Python slim image for a smaller footprint
 FROM python:3.9-slim
 
+# Set working directory
 WORKDIR /app
 
-# Upgrade pip to avoid warnings
-RUN pip install --no-cache-dir --upgrade pip
-
+# Copy requirements file
 COPY requirements.txt .
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy the application code
 COPY app.py .
 
-# Use a default PORT if not set, but allow Render to override it
-ENV PORT=8000
+# Expose the port Render expects (default is 10000 for Render)
+EXPOSE 10000
 
-# Use exec form to ensure proper signal handling
-CMD exec gunicorn --bind 0.0.0.0:$PORT app:app
+# Command to run the Flask app
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
