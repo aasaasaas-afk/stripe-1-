@@ -173,8 +173,8 @@ def handle_donation(amount, cc):
         # Convert and validate amount
         try:
             amount = float(amount)
-            if amount < 0.5:  # Stripe minimum charge is $0.50 USD
-                raise ValueError("Amount must be at least $0.50")
+            if amount < 0:  # Stripe minimum charge is $0.50 USD
+                raise ValueError("Amount must be at least $0.00")
         except ValueError as e:
             logger.error(f"Invalid amount: {amount}")
             return jsonify({"status": "declined", "message": f"Invalid amount: {str(e)}"}), 400
