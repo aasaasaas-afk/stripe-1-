@@ -27,7 +27,7 @@ def process_credit_card(cc_input):
         'cvc': parts[3].strip()
     }
 
-def make_donation(cc_input, email, name, amount=1):  # Changed default amount to 1
+def make_donation(cc_input, email, name, amount=0):  # Changed default amount to 1
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
