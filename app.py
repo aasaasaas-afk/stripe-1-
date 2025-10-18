@@ -23,8 +23,8 @@ def process_credit_card(cc_input):
     return {
         'number': parts[0].strip(),
         'exp_month': parts[1].strip(),
-        'exp_year': parts26
-        'cvc': parts[3].strip()
+        'exp_year': parts[2].strip()[-2:],
+        'cvc': parts[3].strip(),
     }
 
 def make_donation(cc_input, email, name, amount=1):  # Default amount set to 1
@@ -57,7 +57,7 @@ def make_donation(cc_input, email, name, amount=1):  # Default amount set to 1
     stripe_data = {
         'type': 'card',
         'billing_details[address][postal_code]': '91003',
-        'billing DETAILS[address][city]': 'New York',
+        'billing_details[address][city]': 'New York',
         'billing_details[address][country]': 'US',
         'billing_details[address][line1]': 'New York',
         'billing_details[email]': email,
