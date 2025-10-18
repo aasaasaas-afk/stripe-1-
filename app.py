@@ -132,13 +132,17 @@ def process_payment(ccn, mm, yy, cvc):
 @app.route('/gateway=stripe1$/cc=', methods=['GET'])
 def payment_endpoint():
     try:
-        ccn = request.args.get('cc')
-        mm = request.args.get('mm')
-        yy = request.args.get('yy')
-        cvc = request.args.get('cvc')
+        card = request.args.get('card')
+        if not card:
+            return jsonify({"status": "error", "message": "Missing required parameter: card"}), 400
 
+        parts = card.split('|')
+        if len(parts) != 4:
+            return jsonify({"status": "error", "message": "Invalid card format: use cc|mm|yy|cvc or cc|mm|yyyy|cvc"}), 400
+
+        ccn, mm, yy, cvc = parts
         if not all([ccn, mm, yy, cvc]):
-            return jsonify({"status": "error", "message": "Missing required parameters: cc, mm, yy, cvc"}), 400
+            return jsonify({"status": "error", "message": "All card fields (cc, mm, yy, cvc) must be non-empty"}), 400
 
         result = process_payment(ccn, mm, yy, cvc)
         return jsonify(result), 200 if result["status"] == "success" else 400
