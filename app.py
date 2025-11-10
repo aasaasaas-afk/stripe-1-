@@ -7,9 +7,14 @@ from colorama import Fore, Style
 import json
 import os
 from dotenv import load_dotenv
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -211,25 +216,50 @@ acct_1OIXF8CiL0tzws6Z
 """
 
     try:
+        logger.info(f"Making first request to {url1}")
         resp1 = requests.post(url1, headers=headers1, data=form_data, timeout=30, proxies=proxy)
         
+        logger.info(f"First response status: {resp1.status_code}")
+        logger.info(f"First response headers: {resp1.headers}")
+        logger.info(f"First response content type: {resp1.headers.get('content-type', 'unknown')}")
+        
         if resp1.status_code != 200:
+            logger.error(f"First request failed with status {resp1.status_code}")
+            logger.error(f"Response content: {resp1.text[:500]}")
             return {"status": "ERROR", "message": f"First request failed: {resp1.status_code}"}
+        
+        # Check if response is JSON
+        content_type = resp1.headers.get('content-type', '').lower()
+        if 'application/json' not in content_type:
+            logger.error(f"Unexpected content type: {content_type}")
+            logger.error(f"Response content: {resp1.text[:500]}")
+            return {"status": "ERROR", "message": f"Unexpected response format: {content_type}"}
         
         try:
             response_data = resp1.json()
+            logger.info(f"Successfully parsed JSON response")
+            
             client_secret = response_data.get('data', {}).get('clientSecret')
             
             if not client_secret:
+                logger.error("No client secret found in response")
+                logger.error(f"Response data: {response_data}")
                 return {"status": "ERROR", "message": "Could not extract client secret"}
             
             payment_intent_id = extract_payment_intent_id(client_secret)
             
             if not payment_intent_id:
+                logger.error(f"Could not extract payment intent ID from: {client_secret}")
                 return {"status": "ERROR", "message": "Could not extract payment intent ID"}
                 
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            logger.error(f"Response content: {resp1.text[:500]}")
+            return {"status": "ERROR", "message": f"Failed to parse JSON response: {str(e)}"}
         except Exception as e:
-            return {"status": "ERROR", "message": f"Failed to parse response: {e}"}
+            logger.error(f"Error processing response: {e}")
+            logger.error(f"Response content: {resp1.text[:500]}")
+            return {"status": "ERROR", "message": f"Failed to parse response: {str(e)}"}
         
         url2 = f'https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm'
         
@@ -276,6 +306,7 @@ acct_1OIXF8CiL0tzws6Z
             'client_secret': client_secret
         }
 
+        logger.info(f"Making second request to {url2}")
         resp2 = requests.post(url2, headers=headers2, data=form_data2, timeout=30, proxies=proxy)
         
         card_info = f"{n}|{mm}|{yy}|{cvc}"
@@ -307,8 +338,10 @@ acct_1OIXF8CiL0tzws6Z
                 return {"status": "ERROR", "message": f"HTTP {resp2.status_code}: {resp2.text}", "card": card_info}
 
     except requests.exceptions.RequestException as e:
+        logger.error(f"Request exception: {e}")
         return {"status": "ERROR", "message": f"Connection failed: {e}"}
     except Exception as e:
+        logger.error(f"General exception: {e}")
         return {"status": "ERROR", "message": f"An error occurred: {e}"}
 
 @app.route('/gate=stripe1$/cc=<path:cc>')
