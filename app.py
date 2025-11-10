@@ -8,6 +8,8 @@ import json
 import os
 from dotenv import load_dotenv
 import logging
+import re
+from bs4 import BeautifulSoup
 
 # Load environment variables
 load_dotenv()
@@ -87,6 +89,48 @@ def validate_card(n, mm, yy, cvc):
         return False, "Invalid expiration date"
     
     return True, ""
+
+def extract_client_secret_from_html(html_content):
+    """Extract client secret from HTML response"""
+    try:
+        # Try to find client secret in JavaScript variables
+        # Look for patterns like: clientSecret: "pi_xxx_secret_xxx"
+        secret_pattern = r'clientSecret["\']?\s*[:=]\s*["\']([^"\']+)["\']'
+        matches = re.findall(secret_pattern, html_content)
+        
+        if matches:
+            for match in matches:
+                if match.startswith('pi_'):
+                    logger.info(f"Found client secret in HTML: {match[:20]}...")
+                    return match
+        
+        # Try to find in JSON data embedded in HTML
+        json_pattern = r'givewpStripePaymentElementData["\']?\s*[:=]\s*({[^}]+})'
+        json_matches = re.findall(json_pattern, html_content)
+        
+        for json_match in json_matches:
+            try:
+                data = json.loads(json_match)
+                if 'clientSecret' in data:
+                    return data['clientSecret']
+            except:
+                pass
+        
+        # Try to find in script tags
+        soup = BeautifulSoup(html_content, 'html.parser')
+        scripts = soup.find_all('script')
+        
+        for script in scripts:
+            if script.string:
+                script_content = script.string
+                secret_matches = re.findall(r'pi_[^"\']*_secret_[^"\']*', script_content)
+                if secret_matches:
+                    return secret_matches[0]
+        
+        return None
+    except Exception as e:
+        logger.error(f"Error extracting client secret from HTML: {e}")
+        return None
 
 def check_card(cc):
     parts = cc.split('|')
@@ -228,38 +272,38 @@ acct_1OIXF8CiL0tzws6Z
             logger.error(f"Response content: {resp1.text[:500]}")
             return {"status": "ERROR", "message": f"First request failed: {resp1.status_code}"}
         
-        # Check if response is JSON
+        # Check content type and parse accordingly
         content_type = resp1.headers.get('content-type', '').lower()
-        if 'application/json' not in content_type:
-            logger.error(f"Unexpected content type: {content_type}")
-            logger.error(f"Response content: {resp1.text[:500]}")
-            return {"status": "ERROR", "message": f"Unexpected response format: {content_type}"}
+        client_secret = None
         
-        try:
-            response_data = resp1.json()
-            logger.info(f"Successfully parsed JSON response")
-            
-            client_secret = response_data.get('data', {}).get('clientSecret')
+        if 'application/json' in content_type:
+            try:
+                response_data = resp1.json()
+                logger.info(f"Successfully parsed JSON response")
+                client_secret = response_data.get('data', {}).get('clientSecret')
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {e}")
+                logger.error(f"Response content: {resp1.text[:500]}")
+                return {"status": "ERROR", "message": f"Failed to parse JSON response: {str(e)}"}
+        else:
+            # Handle HTML response
+            logger.info("Received HTML response, attempting to extract client secret")
+            client_secret = extract_client_secret_from_html(resp1.text)
             
             if not client_secret:
-                logger.error("No client secret found in response")
-                logger.error(f"Response data: {response_data}")
-                return {"status": "ERROR", "message": "Could not extract client secret"}
-            
-            payment_intent_id = extract_payment_intent_id(client_secret)
-            
-            if not payment_intent_id:
-                logger.error(f"Could not extract payment intent ID from: {client_secret}")
-                return {"status": "ERROR", "message": "Could not extract payment intent ID"}
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            logger.error(f"Response content: {resp1.text[:500]}")
-            return {"status": "ERROR", "message": f"Failed to parse JSON response: {str(e)}"}
-        except Exception as e:
-            logger.error(f"Error processing response: {e}")
-            logger.error(f"Response content: {resp1.text[:500]}")
-            return {"status": "ERROR", "message": f"Failed to parse response: {str(e)}"}
+                logger.error("Could not extract client secret from HTML")
+                logger.error(f"HTML content: {resp1.text[:1000]}")
+                return {"status": "ERROR", "message": "Could not extract client secret from HTML response"}
+        
+        if not client_secret:
+            logger.error("No client secret found in response")
+            return {"status": "ERROR", "message": "Could not extract client secret"}
+        
+        payment_intent_id = extract_payment_intent_id(client_secret)
+        
+        if not payment_intent_id:
+            logger.error(f"Could not extract payment intent ID from: {client_secret}")
+            return {"status": "ERROR", "message": "Could not extract payment intent ID"}
         
         url2 = f'https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm'
         
