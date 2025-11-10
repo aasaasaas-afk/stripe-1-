@@ -5,8 +5,18 @@ import string
 from flask import Flask, request, jsonify
 from colorama import Fore, Style
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
+
+# Configuration
+DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
+HOST = os.getenv('HOST', '0.0.0.0')
+PORT = int(os.getenv('PORT', 5000))
 
 PROXIES = [
     "142.111.48.253:7030:fqcqdvlf:k7rypvhmn940",
@@ -302,12 +312,21 @@ acct_1OIXF8CiL0tzws6Z
         return {"status": "ERROR", "message": f"An error occurred: {e}"}
 
 @app.route('/gate=stripe1$/cc=<path:cc>')
-def stripe_check():
+def stripe_check(cc):
     if not cc:
         return jsonify({"status": "ERROR", "message": "Missing cc parameter"})
     
     result = check_card(cc)
     return jsonify(result)
 
+@app.route('/')
+def index():
+    return jsonify({
+        "service": "Stripe Card Checker API",
+        "version": "1.0",
+        "endpoint": "/gate=stripe1$/cc=<card_details>",
+        "format": "number|mm|yy|cvc"
+    })
+
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=DEBUG, host=HOST, port=PORT)
