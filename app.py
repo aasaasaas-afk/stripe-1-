@@ -9,15 +9,15 @@ app = Flask(__name__)
 def process_donation(card_info):
     try:
         # Parse card information from pipe format
-        # Expected format: number|cvc|exp_month|exp_year|name|address_line1|address_city|address_state|address_zip
+        # Expected format: number|cvc|exp_month|exp_year
         card_parts = card_info.split('|')
         
-        if len(card_parts) < 9:
+        if len(card_parts) < 4:
             return {
                 "error_code": "invalid_card_format",
                 "response": {
                     "code": "invalid_card_format",
-                    "message": "Card information should be in format: number|cvc|exp_month|exp_year|name|address_line1|address_city|address_state|address_zip"
+                    "message": "Card information should be in format: number|cvc|exp_month|exp_year"
                 }
             }
         
@@ -25,11 +25,13 @@ def process_donation(card_info):
         card_cvc = card_parts[1]
         card_exp_month = card_parts[2]
         card_exp_year = card_parts[3]
-        card_name = card_parts[4]
-        card_address_line1 = card_parts[5]
-        card_address_city = card_parts[6]
-        card_address_state = card_parts[7]
-        card_address_zip = card_parts[8]
+        
+        # Hardcoded values for other fields
+        card_name = "ROCKYY"
+        card_address_line1 = "15th street"
+        card_address_city = "new york"
+        card_address_state = "FL"
+        card_address_zip = "10080"
         
         # Step 1: Get the donation page to obtain necessary cookies and tokens
         cookies = {
