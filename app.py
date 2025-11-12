@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 import requests
 import re
+import json
 
 app = Flask(__name__)
 
@@ -41,19 +42,43 @@ def fetch_cart_token():
             timeout=30
         )
         
-        if response.status_code != 200 or 'redirectUrlPath' not in response.json():
-            error_msg = response.json().get('error', {}).get('message', 'Failed to create new cart')
-            return {'success': False, 'message': error_msg}
+        if response.status_code != 200:
+            return {
+                'success': False, 
+                'message': f'HTTP error: {response.status_code}',
+                'raw_response': response.text
+            }
+        
+        response_data = response.json()
+        if 'redirectUrlPath' not in response_data:
+            error_msg = response_data.get('error', {}).get('message', 'Failed to create new cart')
+            return {
+                'success': False, 
+                'message': error_msg,
+                'raw_response': response.text
+            }
         
         # Extract cart token from redirect URL
-        redirect_url = response.json()['redirectUrlPath']
+        redirect_url = response_data['redirectUrlPath']
         match = re.search(r'cartToken=([^&]+)', redirect_url)
         if not match:
-            return {'success': False, 'message': 'Unable to extract cart token'}
+            return {
+                'success': False, 
+                'message': 'Unable to extract cart token',
+                'raw_response': response.text
+            }
         
-        return {'success': True, 'cartToken': match.group(1)}
+        return {
+            'success': True, 
+            'cartToken': match.group(1),
+            'raw_response': response.text
+        }
     except Exception as e:
-        return {'success': False, 'message': str(e)}
+        return {
+            'success': False, 
+            'message': str(e),
+            'raw_response': str(e)
+        }
 
 # Create payment method with Stripe API
 def create_payment_method(card_number, exp_month, exp_year, cvc):
@@ -113,17 +138,37 @@ def create_payment_method(card_number, exp_month, exp_year, cvc):
             timeout=30
         )
         
+        response_data = response.json()
+        
         if response.status_code != 200:
-            error_msg = response.json().get('error', {}).get('message', 'Unknown error')
-            return {'success': False, 'message': error_msg, 'payment_method_id': None}
+            error_msg = response_data.get('error', {}).get('message', 'Unknown error')
+            return {
+                'success': False, 
+                'message': error_msg, 
+                'payment_method_id': None,
+                'raw_response': response.text
+            }
         
-        result = response.json()
-        if 'id' not in result:
-            return {'success': False, 'message': 'Invalid response from Stripe', 'payment_method_id': None}
+        if 'id' not in response_data:
+            return {
+                'success': False, 
+                'message': 'Invalid response from Stripe', 
+                'payment_method_id': None,
+                'raw_response': response.text
+            }
         
-        return {'success': True, 'payment_method_id': result['id']}
+        return {
+            'success': True, 
+            'payment_method_id': response_data['id'],
+            'raw_response': response.text
+        }
     except Exception as e:
-        return {'success': False, 'message': str(e), 'payment_method_id': None}
+        return {
+            'success': False, 
+            'message': str(e), 
+            'payment_method_id': None,
+            'raw_response': str(e)
+        }
 
 # Process payment with merchant API
 def process_payment(cart_token, payment_method_id):
@@ -209,16 +254,35 @@ def process_payment(cart_token, payment_method_id):
             timeout=30
         )
         
+        response_data = response.json()
+        
         if response.status_code != 200:
-            return {'success': False, 'message': f'HTTP error: {response.status_code}'}
+            return {
+                'success': False, 
+                'message': f'HTTP error: {response.status_code}',
+                'raw_response': response.text
+            }
         
-        result = response.json()
-        if 'failureType' in result:
-            return {'success': False, 'message': result['failureType']}
+        # Check if payment was successful or declined
+        if 'failureType' in response_data:
+            return {
+                'success': False, 
+                'message': response_data['failureType'],
+                'raw_response': response.text
+            }
         
-        return {'success': True, 'message': 'CHARGED'}
+        # If we get here, the payment was successful
+        return {
+            'success': True, 
+            'message': 'CHARGED',
+            'raw_response': response.text
+        }
     except Exception as e:
-        return {'success': False, 'message': str(e)}
+        return {
+            'success': False, 
+            'message': str(e),
+            'raw_response': str(e)
+        }
 
 @app.route('/gate=stripe1$/cc=<card_info>')
 def check_card(card_info):
@@ -228,7 +292,8 @@ def check_card(card_info):
         if len(card_parts) < 4:
             return jsonify({
                 'status': 'ERROR',
-                'message': 'Invalid card format. Expected: number|month|year|cvc'
+                'message': 'Invalid card format. Expected: number|month|year|cvc',
+                'raw_response': 'Invalid card format'
             })
         
         card_number = card_parts[0]
@@ -243,7 +308,8 @@ def check_card(card_info):
     except Exception as e:
         return jsonify({
             'status': 'ERROR',
-            'message': f'Error parsing card information: {str(e)}'
+            'message': f'Error parsing card information: {str(e)}',
+            'raw_response': str(e)
         })
     
     # Validate card details
@@ -251,7 +317,8 @@ def check_card(card_info):
         return jsonify({
             'status': 'DECLINED',
             'message': 'Missing card details',
-            'response': 'MISSING_CARD_DETAILS'
+            'response': 'MISSING_CARD_DETAILS',
+            'raw_response': 'Missing card details'
         })
     
     # Step 1: Create payment method with Stripe
@@ -261,7 +328,8 @@ def check_card(card_info):
             'status': 'DECLINED',
             'message': 'Your card was declined',
             'response': stripe_result['message'],
-            'payment_method_id': stripe_result['payment_method_id']
+            'payment_method_id': stripe_result['payment_method_id'],
+            'raw_response': stripe_result['raw_response']
         })
     
     payment_method_id = stripe_result['payment_method_id']
@@ -273,7 +341,8 @@ def check_card(card_info):
             'status': 'ERROR',
             'message': 'Unable to create new cart',
             'response': cart_result['message'],
-            'payment_method_id': payment_method_id
+            'payment_method_id': payment_method_id,
+            'raw_response': cart_result['raw_response']
         })
     
     cart_token = cart_result['cartToken']
@@ -291,7 +360,8 @@ def check_card(card_info):
                 'status': 'CHARGED',
                 'message': 'Your card has been charged $1.00 successfully.',
                 'response': 'CHARGED',
-                'payment_method_id': payment_method_id
+                'payment_method_id': payment_method_id,
+                'raw_response': payment_result['raw_response']
             })
         
         # Handle specific errors that require a new cart token
@@ -302,7 +372,8 @@ def check_card(card_info):
                     'status': 'ERROR',
                     'message': 'Unable to create new cart',
                     'response': cart_result['message'],
-                    'payment_method_id': payment_method_id
+                    'payment_method_id': payment_method_id,
+                    'raw_response': cart_result['raw_response']
                 })
             cart_token = cart_result['cartToken']
             retry_count += 1
@@ -313,7 +384,8 @@ def check_card(card_info):
             'status': 'DECLINED',
             'message': 'Your card was declined',
             'response': f"PAYMENT_DECLINED [{payment_result['message']}]",
-            'payment_method_id': payment_method_id
+            'payment_method_id': payment_method_id,
+            'raw_response': payment_result['raw_response']
         })
     
     # Max retries reached
@@ -321,7 +393,8 @@ def check_card(card_info):
         'status': 'ERROR',
         'message': 'Unable to process payment due to persistent errors',
         'response': f"MAX_RETRIES_EXCEEDED {card_number}|{exp_month}|{exp_year}|{cvc}",
-        'payment_method_id': payment_method_id
+        'payment_method_id': payment_method_id,
+        'raw_response': 'Max retries exceeded'
     })
 
 @app.route('/')
