@@ -144,9 +144,6 @@ def submit_donation(stripe_token):
         return {"error_code": "submit_error", "response": {"code": "submit_error", "message": str(e)}}
 
 
-# -------------------------------------------------
-# 5. MAIN ENDPOINT WITH CVC & AMEX VALIDATION
-# -------------------------------------------------
 @app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
 def stripe_gate(card):
     try:
@@ -160,7 +157,9 @@ def stripe_gate(card):
 
         cc, mm, yy, cvc = parts
 
-        # --- BASIC VALIDATION ---
+        # --- NO CARD NUMBER CHECKING ANYMORE ---
+        # Only validate MM, YY, CVC format
+
         if not mm.isdigit() or not (1 <= int(mm) <= 12):
             return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
         if not yy.isdigit() or len(yy) not in [2, 4]:
@@ -168,7 +167,7 @@ def stripe_gate(card):
         if not cvc.isdigit():
             return jsonify({"error_code": "invalid_cvc", "response": {"code": "invalid_cvc", "message": "CVC must be digits"}}), 400
 
-        # --- AMEX CVC LOGIC ---
+        # --- AMEX CVC LOGIC (ONLY CHECK) ---
         is_amex = cc.startswith('3')
         cvc_len = len(cvc)
 
@@ -191,7 +190,7 @@ def stripe_gate(card):
                     }
                 }), 400
 
-        # --- CREATE TOKEN ---
+        # --- CREATE STRIPE TOKEN ---
         token, err = create_stripe_token(cc, mm, yy, cvc)
         if not token:
             return jsonify({
@@ -199,15 +198,15 @@ def stripe_gate(card):
                 "response": {"code": "token_failed", "message": err or "Token creation failed"}
             }), 400
 
-        # --- SUBMIT ---
+        # --- SUBMIT DONATION ---
         return jsonify(submit_donation(token)), 200
 
     except Exception as e:
         return jsonify({
             "error_code": "server_error",
             "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
+, {e.__class__.__name__}"}
         }), 500
-
 
 # -------------------------------------------------
 # 6. HOME PAGE
