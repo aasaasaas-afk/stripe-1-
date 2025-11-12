@@ -203,11 +203,24 @@ def process_donation(card_info):
                     }
                 }
             else:
-                # If no error information is available
-                result = {
-                    "error_code": "",
-                    "response": response_json
-                }
+                # If no error information is available, check if there's a success message
+                if 'success' in response_json:
+                    success = response_json['success']
+                    message = success.get('message', 'Transaction successful')
+                    
+                    result = {
+                        "error_code": "",
+                        "response": {
+                            "code": "success",
+                            "message": message
+                        }
+                    }
+                else:
+                    # No clear success or error, return the response as is
+                    result = {
+                        "error_code": "",
+                        "response": response_json
+                    }
                 
         except json.JSONDecodeError:
             # If response is not JSON, try to extract error information from HTML
@@ -219,6 +232,30 @@ def process_donation(card_info):
             
             error_code = code_match.group(1).strip() if code_match else ''
             message = message_match.group(1).strip() if message_match else ''
+            
+            # If we couldn't find the error patterns, try other patterns
+            if not error_code and not message:
+                # Try to find any error messages in the HTML
+                error_match = re.search(r'<div[^>]*class="error"[^>]*>([^<]+)</div>', response_text)
+                if error_match:
+                    message = error_match.group(1).strip()
+                    error_code = "html_error"
+                else:
+                    # Try to find any alert messages
+                    alert_match = re.search(r'alert\(["\']([^"\']+)["\']\)', response_text)
+                    if alert_match:
+                        message = alert_match.group(1).strip()
+                        error_code = "alert_error"
+                    else:
+                        # Check if there's a success message
+                        success_match = re.search(r'<div[^>]*class="success"[^>]*>([^<]+)</div>', response_text)
+                        if success_match:
+                            message = success_match.group(1).strip()
+                            error_code = "success"
+                        else:
+                            # If no specific patterns found, return a generic response
+                            message = "Unable to determine transaction status"
+                            error_code = "unknown"
             
             # Format as requested
             result = {
