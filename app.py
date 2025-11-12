@@ -172,7 +172,10 @@ def create_payment_method(card_number, exp_month, exp_year, cvc):
 
 # Process payment with merchant API
 def process_payment(cart_token, payment_method_id):
-    cookies = 'crumb=BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1; ' \
+    # Use the specified crumb
+    crumb = 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1'
+    
+    cookies = f'crumb={crumb}; ' \
               'ss_cvr=b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1; ' \
               'ss_cvt=1760724937850; ' \
               '__stripe_mid=3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48; ' \
@@ -192,7 +195,7 @@ def process_payment(cart_token, payment_method_id):
         'sec-fetch-mode': 'cors',
         'sec-fetch-site': 'same-origin',
         'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
-        'x-csrf-token': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+        'x-csrf-token': crumb,
     }
 
     json_data = {
@@ -254,28 +257,62 @@ def process_payment(cart_token, payment_method_id):
             timeout=30
         )
         
-        response_data = response.json()
+        response_text = response.text
+        response_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
         
         if response.status_code != 200:
             return {
                 'success': False, 
                 'message': f'HTTP error: {response.status_code}',
-                'raw_response': response.text
+                'raw_response': response_text
             }
         
-        # Check if payment was successful or declined
+        # Check for error in the response
+        if 'error' in response_data:
+            return {
+                'success': False, 
+                'message': response_data.get('error', 'Unknown error'),
+                'raw_response': response_text
+            }
+        
+        # Check for crumb failure
+        if response_data.get('crumbFail') is True:
+            return {
+                'success': False, 
+                'message': f"Crumb failure: {response_data.get('error', 'Invalid crumb')}",
+                'raw_response': response_text
+            }
+        
+        # Check for failureType
         if 'failureType' in response_data:
             return {
                 'success': False, 
                 'message': response_data['failureType'],
-                'raw_response': response.text
+                'raw_response': response_text
             }
         
-        # If we get here, the payment was successful
+        # Check for payment status in the response
+        # Look for indicators of successful payment
+        if 'paymentStatus' in response_data and response_data['paymentStatus'] in ['PAID', 'CAPTURED', 'COMPLETED']:
+            return {
+                'success': True, 
+                'message': 'CHARGED',
+                'raw_response': response_text
+            }
+        
+        # Check for order status
+        if 'status' in response_data and response_data['status'] in ['COMPLETED', 'SUCCESS']:
+            return {
+                'success': True, 
+                'message': 'CHARGED',
+                'raw_response': response_text
+            }
+        
+        # If we can't determine success from the response, assume failure
         return {
-            'success': True, 
-            'message': 'CHARGED',
-            'raw_response': response.text
+            'success': False, 
+            'message': 'Unable to determine payment status',
+            'raw_response': response_text
         }
     except Exception as e:
         return {
