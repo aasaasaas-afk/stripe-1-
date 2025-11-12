@@ -68,9 +68,13 @@ def fetch_cart_token():
                 'raw_response': response.text
             }
         
+        # Try to extract crumb from response if available
+        crumb = response_data.get('crumb', None)
+        
         return {
             'success': True, 
             'cartToken': match.group(1),
+            'crumb': crumb,
             'raw_response': response.text
         }
     except Exception as e:
@@ -171,9 +175,10 @@ def create_payment_method(card_number, exp_month, exp_year, cvc):
         }
 
 # Process payment with merchant API
-def process_payment(cart_token, payment_method_id):
-    # Use the specified crumb
-    crumb = 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1'
+def process_payment(cart_token, payment_method_id, crumb=None):
+    # Use hardcoded crumb if none provided
+    if crumb is None:
+        crumb = 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1'
     
     cookies = f'crumb={crumb}; ' \
               'ss_cvr=b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1; ' \
@@ -264,15 +269,8 @@ def process_payment(cart_token, payment_method_id):
             return {
                 'success': False, 
                 'message': f'HTTP error: {response.status_code}',
-                'raw_response': response_text
-            }
-        
-        # Check for error in the response
-        if 'error' in response_data:
-            return {
-                'success': False, 
-                'message': response_data.get('error', 'Unknown error'),
-                'raw_response': response_text
+                'raw_response': response_text,
+                'new_crumb': response_data.get('crumb', None)
             }
         
         # Check for crumb failure
@@ -280,7 +278,17 @@ def process_payment(cart_token, payment_method_id):
             return {
                 'success': False, 
                 'message': f"Crumb failure: {response_data.get('error', 'Invalid crumb')}",
-                'raw_response': response_text
+                'raw_response': response_text,
+                'new_crumb': response_data.get('crumb', None)
+            }
+        
+        # Check for error in the response
+        if 'error' in response_data:
+            return {
+                'success': False, 
+                'message': response_data.get('error', 'Unknown error'),
+                'raw_response': response_text,
+                'new_crumb': response_data.get('crumb', None)
             }
         
         # Check for failureType
@@ -383,13 +391,15 @@ def check_card(card_info):
         })
     
     cart_token = cart_result['cartToken']
+    cart_crumb = cart_result.get('crumb', None)
     
     # Step 3: Process payment with retry logic
     max_retries = 3
     retry_count = 0
+    current_crumb = cart_crumb
     
     while retry_count < max_retries:
-        payment_result = process_payment(cart_token, payment_method_id)
+        payment_result = process_payment(cart_token, payment_method_id, current_crumb)
         
         if payment_result['success']:
             # Success
@@ -400,6 +410,14 @@ def check_card(card_info):
                 'payment_method_id': payment_method_id,
                 'raw_response': payment_result['raw_response']
             })
+        
+        # Handle crumb failure by extracting new crumb and retrying
+        if 'crumb' in payment_result['message'].lower() or payment_result.get('new_crumb'):
+            new_crumb = payment_result.get('new_crumb')
+            if new_crumb:
+                current_crumb = new_crumb
+                retry_count += 1
+                continue
         
         # Handle specific errors that require a new cart token
         if payment_result['message'] in ['CART_ALREADY_PURCHASED', 'CART_MISSING', 'STALE_USER_SESSION']:
@@ -413,6 +431,8 @@ def check_card(card_info):
                     'raw_response': cart_result['raw_response']
                 })
             cart_token = cart_result['cartToken']
+            cart_crumb = cart_result.get('crumb', None)
+            current_crumb = cart_crumb
             retry_count += 1
             continue
         
