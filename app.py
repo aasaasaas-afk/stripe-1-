@@ -11,49 +11,49 @@ session = requests.Session()
 
 def log_final_response(response):
     try:
+        # 1. Try JSON first
         try:
             response_json = response.json()
         except json.JSONDecodeError:
             response_json = None
 
-        if response_json and 'error' in response_json:
-            error = response_json['error']
-            error_code = error.get('code', '')
-            message = error.get('message', '')
-            result = {
-                "error_code": error_code,
-                "response": {
-                    "code": error_code,
-                    "message": message
-                }
-            }
-        elif response_json:
-            result = {
-                "error_code": "",
-                "response": response_json
-            }
+        if response_json:
+            if 'error' in response_json:
+                err = response_json['error']
+                code = err.get('code', '')
+                msg  = err.get('message', '')
+            else:
+                code = ''
+                msg  = response_json
         else:
-            # HTML fallback
+            # 2. HTML fallback – clean the noisy output
             text = response.text
-            code_match = re.search(r'Code is:([^<]+)', text, re.I)
-            message_match = re.search(r'Message is:([^<]+)', text, re.I)
-            error_code = code_match.group(1).strip() if code_match else "html_error"
-            message = message_match.group(1).strip() if message_match else "Unknown HTML error"
 
-            result = {
-                "error_code": error_code,
-                "response": {
-                    "code": error_code,
-                    "message": message
-                }
+            # Remove the noisy prefix that sometimes appears
+            text = re.sub(r'[\r\n]+Param is:[\r\n]+', ' ', text, flags=re.I)
+
+            # Extract Code / Message
+            code_match = re.search(r'Code\s*is:\s*([^\n<]+)', text, re.I)
+            msg_match  = re.search(r'Message\s*is:\s*([^\n<]+)', text, re.I)
+
+            code = code_match.group(1).strip() if code_match else ''
+            msg  = msg_match.group(1).strip() if msg_match else 'Unknown error'
+
+        # Build clean result
+        result = {
+            "error_code": code,
+            "response": {
+                "code": code,
+                "message": msg
             }
+        }
 
     except Exception as e:
         result = {
             "error_code": "parse_error",
             "response": {
                 "code": "parse_error",
-                "message": f"Parse failed: {str(e)}"
+                "message": f"Failed to parse response: {str(e)}"
             }
         }
 
