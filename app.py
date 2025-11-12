@@ -161,8 +161,6 @@ def stripe_gate(card):
         cc, mm, yy, cvc = parts
 
         # --- BASIC VALIDATION ---
-        if not cc.isdigit() or len(cc) < 13 or len(cc) > 19:
-            return jsonify({"error_code": "invalid_cc", "response": {"code": "invalid_cc", "message": "Invalid card number"}}), 400
         if not mm.isdigit() or not (1 <= int(mm) <= 12):
             return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
         if not yy.isdigit() or len(yy) not in [2, 4]:
