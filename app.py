@@ -23,17 +23,22 @@ def log_final_response(response):
                 msg  = data
         except json.JSONDecodeError:
             html = response.text
-            # Remove noisy lines
-            html = re.sub(r'[\r\n]+Param\s*is:.*?(?=[\r\n]|<)', '', html, flags=re.I)
-            # Extract clean code/message
-            code_match = re.search(r'Code\s*is:\s*([^<\n]+)', html, re.I)
-            msg_match  = re.search(r'Message\s*is:\s*([^<\n]+)', html, re.I)
+            # Extract status, type, code, and message from the HTML
+            status_match = re.search(r'Status is:(\d+)', html, re.I)
+            type_match = re.search(r'Type is:([^\n\r]+)', html, re.I)
+            code_match = re.search(r'Code is:([^\n\r]+)', html, re.I)
+            msg_match  = re.search(r'Message is:([^\n\r]+)', html, re.I)
+            
+            status = status_match.group(1).strip() if status_match else ''
+            type = type_match.group(1).strip() if type_match else ''
             code = code_match.group(1).strip() if code_match else ''
             msg  = msg_match.group(1).strip() if msg_match else 'Unknown error'
 
         result = {
             "error_code": code,
             "response": {
+                "status": status if 'status' in locals() else '',
+                "type": type if 'type' in locals() else '',
                 "code": code,
                 "message": msg
             }
