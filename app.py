@@ -13,36 +13,49 @@ session = requests.Session()
 # ===============================================
 def log_final_response(response):
     try:
+        # Try to parse as JSON first
         try:
             data = response.json()
             if 'error' in data:
                 code = data['error'].get('code', '')
-                msg  = data['error'].get('message', '')
+                msg = data['error'].get('message', '')
             else:
-                code = ''
-                msg  = data
+                code = 'success'
+                msg = 'Payment processed successfully'
         except json.JSONDecodeError:
+            # Parse HTML response
             html = response.text
+            
             # Extract status, type, code, and message from the HTML
             status_match = re.search(r'Status is:(\d+)', html, re.I)
             type_match = re.search(r'Type is:([^\n\r]+)', html, re.I)
             code_match = re.search(r'Code is:([^\n\r]+)', html, re.I)
-            msg_match  = re.search(r'Message is:([^\n\r]+)', html, re.I)
+            msg_match = re.search(r'Message is:([^\n\r]+)', html, re.I)
             
             status = status_match.group(1).strip() if status_match else ''
-            type = type_match.group(1).strip() if type_match else ''
-            code = code_match.group(1).strip() if code_match else ''
-            msg  = msg_match.group(1).strip() if msg_match else 'Unknown error'
+            type_val = type_match.group(1).strip() if type_match else ''
+            code = code_match.group(1).strip() if code_match else 'unknown_error'
+            msg = msg_match.group(1).strip() if msg_match else 'Unknown error occurred'
+            
+            # Check for success indicators
+            if 'Thank you' in html or 'Payment Successful' in html or status == '200':
+                code = 'success'
+                msg = 'Payment processed successfully'
 
         result = {
             "error_code": code,
             "response": {
-                "status": status if 'status' in locals() else '',
-                "type": type if 'type' in locals() else '',
                 "code": code,
                 "message": msg
             }
         }
+        
+        # Add additional fields if available
+        if 'status' in locals() and status:
+            result["response"]["status"] = status
+        if 'type_val' in locals() and type_val:
+            result["response"]["type"] = type_val
+            
     except Exception as e:
         result = {
             "error_code": "parse_error",
@@ -51,6 +64,7 @@ def log_final_response(response):
                 "message": f"Parse failed: {str(e)}"
             }
         }
+    
     print(json.dumps(result, indent=2))
     return result
 
@@ -196,45 +210,51 @@ def stripe_gate(card):
         decoded = unquote(card)
         parts = [p.strip() for p in decoded.split('|')]
         if len(parts) != 4:
-            return jsonify({
+            response_data = {
                 "error_code": "invalid_format",
                 "response": {"code": "invalid_format", "message": "Use: cc|mm|yy|cvc"}
-            }), 400
+            }
+            return jsonify(response_data), 400
 
         cc, mm, yy, cvc = parts
 
         # === MONTH VALIDATION ===
         if not mm.isdigit():
-            return jsonify({
+            response_data = {
                 "error_code": "invalid_mm",
                 "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
-            }), 400
+            }
+            return jsonify(response_data), 400
         if not (1 <= int(mm) <= 12):
-            return jsonify({
+            response_data = {
                 "error_code": "invalid_mm",
                 "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
-            }), 400
+            }
+            return jsonify(response_data), 400
 
         # === YEAR VALIDATION ===
         if not yy.isdigit() or len(yy) not in [2, 4]:
-            return jsonify({
+            response_data = {
                 "error_code": "invalid_yy",
                 "response": {"code": "invalid_yy", "message": "Your card's year is invalid"}
-            }), 400
+            }
+            return jsonify(response_data), 400
 
         # === CHECK IF CARD IS EXPIRED ===
         if is_card_expired(mm, yy):
-            return jsonify({
+            response_data = {
                 "error_code": "expired_card",
                 "response": {"code": "expired_card", "message": "Your card has expired"}
-            }), 400
+            }
+            return jsonify(response_data), 400
 
         # === CVC VALIDATION ===
         if not cvc.isdigit():
-            return jsonify({
+            response_data = {
                 "error_code": "invalid_cvc",
                 "response": {"code": "invalid_cvc", "message": "CVC must be digits"}
-            }), 400
+            }
+            return jsonify(response_data), 400
 
         # === AMEX CVC RULE ===
         is_amex = cc.startswith('3')
@@ -242,48 +262,53 @@ def stripe_gate(card):
 
         if is_amex:
             if cvc_len != 4:
-                return jsonify({
+                response_data = {
                     "error_code": "incorrect_cvc",
                     "response": {
                         "code": "incorrect_cvc",
                         "message": "Your card's security code is invalid"
                     }
-                }), 400
+                }
+                return jsonify(response_data), 400
         else:
             if cvc_len != 3:
-                return jsonify({
+                response_data = {
                     "error_code": "incorrect_cvc",
                     "response": {
                         "code": "incorrect_cvc",
                         "message": "Your card's security code is invalid"
                     }
-                }), 400
+                }
+                return jsonify(response_data), 400
 
         # === CREATE TOKEN & SUBMIT ===
         token, err = create_stripe_token(cc, mm, yy, cvc)
         if not token:
             # Handle different error formats
             if isinstance(err, dict):
-                return jsonify({
+                response_data = {
                     "error_code": err.get("error_code", "token_failed"),
                     "response": {
                         "code": err.get("error_code", "token_failed"),
                         "message": err.get("message", "Token creation failed")
                     }
-                }), 400
+                }
             else:
-                return jsonify({
+                response_data = {
                     "error_code": "token_failed",
                     "response": {"code": "token_failed", "message": err or "Token creation failed"}
-                }), 400
+                }
+            return jsonify(response_data), 400
 
-        return jsonify(submit_donation(token)), 200
+        result = submit_donation(token)
+        return jsonify(result), 200
 
     except Exception as e:
-        return jsonify({
+        response_data = {
             "error_code": "server_error",
             "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
-        }), 500
+        }
+        return jsonify(response_data), 500
 
 
 # ===============================================
@@ -312,4 +337,6 @@ if __name__ == '__main__':
     print("Stripe Gate v3 Running")
     print("→ http://127.0.0.1:5000")
     print("Example: /gate=stripe1$/cc=4111111111111111|12|25|123")
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    # For Render deployment
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
