@@ -1,3 +1,4 @@
+import os  # <-- Added this import
 import requests
 import json
 import re
